@@ -3,7 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 	"github.com/JingxuanC/roost-console/apps/api/internal/auth"
 	"github.com/JingxuanC/roost-console/apps/api/internal/billing"
 	"github.com/JingxuanC/roost-console/apps/api/internal/config"
+	"github.com/JingxuanC/roost-console/apps/api/internal/metrics"
 	"github.com/JingxuanC/roost-console/apps/api/internal/oidc"
 	"github.com/JingxuanC/roost-console/apps/api/internal/payment"
 	"github.com/JingxuanC/roost-console/apps/api/internal/ratelimit"
@@ -179,8 +182,83 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/v1/usage/sandbox", s.withService(s.recordSandboxUsage))
 	mux.HandleFunc("POST /internal/v1/usage/leases/{leaseID}/settle", s.withService(s.settle))
 	mux.HandleFunc("POST /internal/v1/usage/leases/{leaseID}/release", s.withService(s.release))
-	return s.cors(mux)
+	return s.observe(s.cors(mux))
 }
+
+// observe records one Prometheus observation and one structured request log per
+// request. Route is the matched ServeMux pattern, so IDs never become labels.
+func (s *Server) observe(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		requestID := strings.TrimSpace(r.Header.Get("X-Request-Id"))
+		if requestID == "" {
+			requestID = newRequestID()
+		}
+		w.Header().Set("X-Request-Id", requestID)
+		sw := &statusWriter{ResponseWriter: w}
+		metrics.Default.AddInFlight(1)
+		next.ServeHTTP(sw, r)
+		metrics.Default.AddInFlight(-1)
+		status := sw.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		route := r.Pattern
+		if route == "" {
+			route = "other"
+		}
+		elapsed := time.Since(start)
+		metrics.Default.ObserveHTTP(r.Method, route, status, elapsed.Seconds())
+		if s.log != nil {
+			s.log.Info("request",
+				"request_id", requestID,
+				"method", r.Method,
+				"route", route,
+				"status", status,
+				"duration_ms", elapsed.Milliseconds(),
+				"bytes", sw.bytes,
+			)
+		}
+	})
+}
+
+func newRequestID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += n
+	return n, err
+}
+
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "roost-console", "time": time.Now().UTC()})

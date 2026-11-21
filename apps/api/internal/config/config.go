@@ -14,7 +14,9 @@ const (
 )
 
 type Config struct {
-	Port            string
+	Port string
+	// MetricsListen is a separate loopback listener for Prometheus /metrics.
+	MetricsListen   string
 	DatabaseURL     string
 	SupabaseURL     string
 	SupabaseAnonKey string
@@ -75,6 +77,7 @@ func Load() Config {
 	}
 	return Config{
 		Port:              get("PORT", "8080"),
+		MetricsListen:     get("METRICS_LISTEN", "127.0.0.1:9095"),
 		DatabaseURL:       get("DATABASE_URL", ""),
 		SupabaseURL:       strings.TrimRight(get("SUPABASE_URL", ""), "/"),
 		SupabaseAnonKey:   get("SUPABASE_ANON_KEY", ""),
