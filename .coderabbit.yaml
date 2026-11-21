@@ -1,0 +1,44 @@
+language: "zh-CN"
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches: ["main"]
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/package-lock.json"
+    - "!**/*.lock"
+    - "!**/go.sum"
+    - "!**/*.snap"
+  path_instructions:
+    - path: "apps/api/**"
+      instructions: |
+        Go 控制台 API。重点检查：
+        - 金额/积分用整数（分、credit），不出现浮点误差
+        - SQL 全部参数化；多租户查询必须带 org_id 过滤
+        - 订单/支付状态机幂等，回调与对账不能重复入账
+        - 认证/权限：admin 接口必须过 adminOnly，用户接口必须校验组织归属
+        - 错误映射到 HTTP 状态，不要泄露内部错误
+    - path: "apps/web/src/**"
+      instructions: |
+        React + TypeScript 前端。重点检查：
+        - 类型安全、hook 依赖与闭包、并发请求的竞态
+        - 登录/会话与 token_hash 兑换逻辑不能重复消费
+        - 金额展示与 minor/credit 单位换算正确
+        - 不把 secret 写进前端；错误态有可操作提示
+    - path: "migrations/**"
+      instructions: |
+        迁移必须可重复执行、向后兼容；新增列用 if not exists，建索引注意锁表，
+        保持 roost_api 的授权与 RLS。
+    - path: "deploy/**"
+      instructions: |
+        部署配置只允许引用 secrets，不要出现明文凭据；nginx/systemd 变更说明回滚方式。
