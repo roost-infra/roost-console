@@ -360,9 +360,24 @@ export interface BillingDetails {
   sandboxes: BillingSandboxRow[];
 }
 
+export interface UsageSessionRow {
+  session_id: string;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  cache_hit_rate: number;
+  last_seen: string;
+}
+
 export interface UsageSummaryResponse {
   days: number;
   totals: UsageTotals;
+  sessions: UsageSessionRow[];
+  session_count: number;
+  session_hit_rate: number;
 }
 
 export interface UsageDailyRow {

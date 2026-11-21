@@ -16,6 +16,9 @@ const (
 
 	UsageRecentDefaultLimit = 50
 	UsageRecentMaxLimit     = 200
+
+	// UsageSessionLimit caps the per-session breakdown in one summary.
+	UsageSessionLimit = 20
 )
 
 // usageSince keeps summary and daily ranges aligned to UTC calendar days, so
@@ -40,10 +43,28 @@ type UsageTotals struct {
 	SummaryCostMinor  int64   `json:"summary_cost_minor"`
 }
 
-// UsageSummary is the summary endpoint's payload.
+// UsageSessionRow is one session's token usage in the range.
+type UsageSessionRow struct {
+	SessionID        string    `json:"session_id"`
+	Requests         int64     `json:"requests"`
+	InputTokens      int64     `json:"input_tokens"`
+	OutputTokens     int64     `json:"output_tokens"`
+	CacheReadTokens  int64     `json:"cache_read_tokens"`
+	CacheWriteTokens int64     `json:"cache_write_tokens"`
+	TotalTokens      int64     `json:"total_tokens"`
+	CacheHitRate     float64   `json:"cache_hit_rate"`
+	LastSeen         time.Time `json:"last_seen"`
+}
+
+// UsageSummary is the summary endpoint's payload. Sessions is the per-session
+// token breakdown (newest-token-first, capped), and SessionHitRate is the warm
+// session cache rate: sessions with any cache read, weighted by their tokens.
 type UsageSummary struct {
-	Days   int         `json:"days"`
-	Totals UsageTotals `json:"totals"`
+	Days           int               `json:"days"`
+	Totals         UsageTotals       `json:"totals"`
+	Sessions       []UsageSessionRow `json:"sessions"`
+	SessionCount   int64             `json:"session_count"`
+	SessionHitRate float64           `json:"session_hit_rate"`
 }
 
 // UsageDailyRow is one UTC day's bucket. Only days with at least one source
@@ -160,7 +181,83 @@ func (s *Store) UsageSummary(ctx context.Context, orgID string, days int) (Usage
 	out.Totals.TotalTokens = out.Totals.InputTokens + out.Totals.OutputTokens +
 		out.Totals.CacheReadTokens + out.Totals.CacheWriteTokens
 	out.Totals.CacheHitRate = cacheHitRate(out.Totals.CacheReadTokens, out.Totals.InputTokens)
+
+	// Per-session breakdown. Older rows (before session_id existed) and
+	// session-less requests are excluded; the frontend labels the section so an
+	// empty list is not mistaken for "no cache".
+	sessionRows, err := s.Pool.Query(ctx, `
+		select session_id,
+		       coalesce(sum(requests),0)::bigint,
+		       coalesce(sum(input_tokens),0)::bigint,
+		       coalesce(sum(output_tokens),0)::bigint,
+		       coalesce(sum(cache_read_tokens),0)::bigint,
+		       coalesce(sum(cache_write_tokens),0)::bigint,
+		       max(created_at)
+		from billing.usage_events
+		where org_id=$1 and created_at >= `+usageSince+`
+		  and session_id is not null and btrim(session_id) <> ''
+		group by session_id
+		order by sum(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) desc
+		limit $3`, orgID, days, UsageSessionLimit)
+	if err != nil {
+		return UsageSummary{}, err
+	}
+	defer sessionRows.Close()
+	out.Sessions = make([]UsageSessionRow, 0, UsageSessionLimit)
+	for sessionRows.Next() {
+		var row UsageSessionRow
+		if err := sessionRows.Scan(&row.SessionID, &row.Requests, &row.InputTokens,
+			&row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens, &row.LastSeen); err != nil {
+			return UsageSummary{}, err
+		}
+		row.TotalTokens = row.InputTokens + row.OutputTokens + row.CacheReadTokens + row.CacheWriteTokens
+		row.CacheHitRate = sessionCacheHitRate(row.CacheReadTokens, row.InputTokens)
+		out.Sessions = append(out.Sessions, row)
+	}
+	if err := sessionRows.Err(); err != nil {
+		return UsageSummary{}, err
+	}
+
+	if err := s.Pool.QueryRow(ctx, `
+		select count(distinct session_id)::bigint
+		from billing.usage_events
+		where org_id=$1 and created_at >= `+usageSince+`
+		  and session_id is not null and btrim(session_id) <> ''`, orgID, days).
+		Scan(&out.SessionCount); err != nil {
+		return UsageSummary{}, err
+	}
+	// SessionHitRate uses the same warm-session filter as the per-row metric.
+	var warmCache, warmInput int64
+	if err := s.Pool.QueryRow(ctx, `
+		select coalesce(sum(cache_read_tokens),0)::bigint,
+		       coalesce(sum(input_tokens),0)::bigint
+		from billing.usage_events
+		where org_id=$1 and created_at >= `+usageSince+`
+		  and session_id is not null and btrim(session_id) <> ''
+		  and cache_read_tokens > 0`, orgID, days).Scan(&warmCache, &warmInput); err != nil {
+		return UsageSummary{}, err
+	}
+	out.SessionHitRate = sessionCacheHitRate(warmCache, warmInput)
 	return out, nil
+}
+
+// sessionCacheHitRate handles both provider conventions: OpenAI-compatible
+// prompt_tokens include the cached tokens (cache_read <= input), while native
+// Anthropic reports uncached input separately (cache_read may exceed input).
+// Preferring cache_read/input for the inclusive shape keeps a warm session at
+// its true ~99% instead of halving it with an input+cache denominator.
+func sessionCacheHitRate(cacheRead, input int64) float64 {
+	if cacheRead <= 0 {
+		return 0
+	}
+	if input >= cacheRead && input > 0 {
+		return float64(cacheRead) / float64(input)
+	}
+	denom := input + cacheRead
+	if denom <= 0 {
+		return 0
+	}
+	return float64(cacheRead) / float64(denom)
 }
 
 // UsageDaily returns one bucket per UTC day that has data, oldest first.
