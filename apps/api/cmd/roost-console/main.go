@@ -19,6 +19,7 @@ import (
 	"github.com/JingxuanC/roost-console/apps/api/internal/config"
 	"github.com/JingxuanC/roost-console/apps/api/internal/db"
 	"github.com/JingxuanC/roost-console/apps/api/internal/httpapi"
+	"github.com/JingxuanC/roost-console/apps/api/internal/metrics"
 	"github.com/JingxuanC/roost-console/apps/api/internal/payment"
 )
 
@@ -170,6 +171,20 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 	}
+	var metricsServer *http.Server
+	if cfg.MetricsListen != "" {
+		metricsServer = &http.Server{
+			Addr:              cfg.MetricsListen,
+			Handler:           metrics.Default.Handler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() {
+			log.Info("metrics listening", "addr", cfg.MetricsListen)
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("metrics server failed", "err", err)
+			}
+		}()
+	}
 	go func() {
 		log.Info("roost console api listening", "addr", httpServer.Addr, "env", cfg.Environment)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -183,4 +198,7 @@ func main() {
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 	_ = httpServer.Shutdown(shutdown)
+	if metricsServer != nil {
+		_ = metricsServer.Shutdown(shutdown)
+	}
 }
