@@ -970,7 +970,7 @@ function UsageDashboard({ token, orgId }: { token: string; orgId: string }) {
           <span>全部请求 · cache_read / (input + cache_read)</span>
         </UsageCard>
         <UsageCard label="Session cache hit" value={sessionCount > 0 ? percent(sessionHitRate) : '—'}>
-          <span>{credits(sessionCount)} 个会话 · 仅有缓存读的会话</span>
+          <span>{credits(sessionCount)} 个会话 · 有 cache_read 的请求</span>
         </UsageCard>
         <UsageCard label="Spend" value={minorCredits(totals.credits_minor)} unit="credits">
           <span>≈ {minorYuan(totals.credits_minor)} · 上游成本 {minorCredits(totals.upstream_cost_minor)} credits</span>
@@ -1070,7 +1070,7 @@ function UsageDashboard({ token, orgId }: { token: string; orgId: string }) {
         </div>
         <div className="usage-table billing-table billing-table--sessions">
           <div className="usage-table__head">
-            <span>会话</span><span>请求</span><span>Tokens</span><span>Cache read</span><span>命中率</span><span>最后活跃</span>
+            <span>会话</span><span>请求</span><span>Tokens</span><span>Cache read</span><span>命中率*</span><span>最后活跃</span>
           </div>
           {sessions.length === 0 ? (
             <div className="usage-table__empty">
@@ -1092,6 +1092,7 @@ function UsageDashboard({ token, orgId }: { token: string; orgId: string }) {
             </div>
           ))}
         </div>
+        <p className="admin-note">* 命中率只统计该会话里有 cache_read 的请求，避免首轮冷启动把会话拉低。</p>
       </section>
 
       <section className="usage-panel usage-panel--recent">

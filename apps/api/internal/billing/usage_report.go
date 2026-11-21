@@ -192,7 +192,9 @@ func (s *Store) UsageSummary(ctx context.Context, orgID string, days int) (Usage
 		       coalesce(sum(output_tokens),0)::bigint,
 		       coalesce(sum(cache_read_tokens),0)::bigint,
 		       coalesce(sum(cache_write_tokens),0)::bigint,
-		       max(created_at)
+		       max(created_at),
+		       coalesce(sum(cache_read_tokens) filter (where cache_read_tokens > 0),0)::bigint,
+		       coalesce(sum(input_tokens) filter (where cache_read_tokens > 0),0)::bigint
 		from billing.usage_events
 		where org_id=$1 and created_at >= `+usageSince+`
 		  and session_id is not null and btrim(session_id) <> ''
@@ -206,12 +208,16 @@ func (s *Store) UsageSummary(ctx context.Context, orgID string, days int) (Usage
 	out.Sessions = make([]UsageSessionRow, 0, UsageSessionLimit)
 	for sessionRows.Next() {
 		var row UsageSessionRow
+		var warmCache, warmInput int64
 		if err := sessionRows.Scan(&row.SessionID, &row.Requests, &row.InputTokens,
-			&row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens, &row.LastSeen); err != nil {
+			&row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens, &row.LastSeen,
+			&warmCache, &warmInput); err != nil {
 			return UsageSummary{}, err
 		}
 		row.TotalTokens = row.InputTokens + row.OutputTokens + row.CacheReadTokens + row.CacheWriteTokens
-		row.CacheHitRate = sessionCacheHitRate(row.CacheReadTokens, row.InputTokens)
+		// Per-session rate is warm-only: the first (cold) request would
+		// otherwise make every healthy session look like a coin flip.
+		row.CacheHitRate = sessionCacheHitRate(warmCache, warmInput)
 		out.Sessions = append(out.Sessions, row)
 	}
 	if err := sessionRows.Err(); err != nil {
