@@ -17,7 +17,8 @@ import (
 // with no usage (or an all-zero object) stores nothing, which keeps older relay
 // clients and empty runs out of the table.
 const (
-	UsageEventMaxModelLen = 200
+	UsageEventMaxModelLen   = 200
+	UsageEventMaxSessionLen = 200
 )
 
 // ErrInvalidUsage is returned for a malformed usage object. The HTTP layer maps
@@ -28,7 +29,10 @@ var ErrInvalidUsage = errors.New("invalid usage")
 // fields are non-negative. UpstreamCostMinor is optional: nil stays null in
 // Postgres so "not reported" is distinguishable from a real zero.
 type UsageEvent struct {
-	Model             string `json:"model"`
+	Model string `json:"model"`
+	// SessionID is the client's explicit session header. Optional: empty means
+	// the request was not session-scoped and per-session reporting skips it.
+	SessionID         string `json:"session_id,omitempty"`
 	Requests          int64  `json:"requests"`
 	InputTokens       int64  `json:"input_tokens"`
 	OutputTokens      int64  `json:"output_tokens"`
@@ -80,6 +84,10 @@ func NormalizeUsage(u *UsageEvent) (*UsageEvent, error) {
 	if utf8.RuneCountInString(out.Model) > UsageEventMaxModelLen {
 		return nil, fmt.Errorf("%w: model must be at most %d characters", ErrInvalidUsage, UsageEventMaxModelLen)
 	}
+	out.SessionID = strings.TrimSpace(u.SessionID)
+	if utf8.RuneCountInString(out.SessionID) > UsageEventMaxSessionLen {
+		return nil, fmt.Errorf("%w: session_id must be at most %d characters", ErrInvalidUsage, UsageEventMaxSessionLen)
+	}
 	if out.IsZero() {
 		return nil, nil
 	}
@@ -109,17 +117,24 @@ type UsageEventRow struct {
 // insertUsageEvent writes the usage row inside the settlement transaction. It
 // is keyed by settlement_id, so a retry that reaches the insert again is a
 // no-op instead of a duplicate.
+func nullIfEmpty(v string) *string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return &v
+}
+
 func insertUsageEvent(ctx context.Context, tx pgx.Tx, orgID, requestID, settlementID, leaseID string, u *UsageEvent) error {
 	if u == nil {
 		return nil
 	}
 	_, err := tx.Exec(ctx, `
 		insert into billing.usage_events
-			(org_id,request_id,settlement_id,lease_id,model,requests,input_tokens,
+			(org_id,request_id,settlement_id,lease_id,model,session_id,requests,input_tokens,
 			 output_tokens,cache_read_tokens,cache_write_tokens,upstream_cost_minor)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		on conflict (settlement_id) do nothing`,
-		orgID, requestID, settlementID, leaseID, u.Model, u.Requests, u.InputTokens,
+		orgID, requestID, settlementID, leaseID, u.Model, nullIfEmpty(u.SessionID), u.Requests, u.InputTokens,
 		u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens, u.UpstreamCostMinor)
 	return err
 }
@@ -133,12 +148,12 @@ type usageEventQuerier interface {
 func queryUsageEvent(ctx context.Context, q usageEventQuerier, leaseID string) (*UsageEvent, error) {
 	var u UsageEvent
 	err := q.QueryRow(ctx, `
-		select model,requests,input_tokens,output_tokens,cache_read_tokens,
+		select model,coalesce(session_id,''),requests,input_tokens,output_tokens,cache_read_tokens,
 		       cache_write_tokens,upstream_cost_minor
 		from billing.usage_events
 		where lease_id=$1
 		order by id limit 1`, leaseID).
-		Scan(&u.Model, &u.Requests, &u.InputTokens, &u.OutputTokens,
+		Scan(&u.Model, &u.SessionID, &u.Requests, &u.InputTokens, &u.OutputTokens,
 			&u.CacheReadTokens, &u.CacheWriteTokens, &u.UpstreamCostMinor)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

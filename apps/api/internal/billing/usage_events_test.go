@@ -157,3 +157,16 @@ func TestUsageEventIsZero(t *testing.T) {
 		t.Fatal("requests-only usage reported as zero")
 	}
 }
+
+func TestNormalizeUsageSessionID(t *testing.T) {
+	t.Parallel()
+	u := &UsageEvent{Model: "m", SessionID: "  sess-1  ", InputTokens: 1}
+	got, err := NormalizeUsage(u)
+	if err != nil || got.SessionID != "sess-1" {
+		t.Fatalf("session trim: got=%+v err=%v", got, err)
+	}
+	tooLong := &UsageEvent{Model: "m", SessionID: strings.Repeat("s", UsageEventMaxSessionLen+1), InputTokens: 1}
+	if _, err := NormalizeUsage(tooLong); !errors.Is(err, ErrInvalidUsage) {
+		t.Fatalf("over-long session err=%v", err)
+	}
+}

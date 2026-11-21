@@ -254,7 +254,7 @@ button { cursor: pointer; }
 .usage-toolbar__meta { display: flex; gap: 14px; font-family: var(--mono); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .usage-status { display: flex; align-items: center; gap: 10px; }
 .usage-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.usage-cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; transition: opacity .15s ease; }
+.usage-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; transition: opacity .15s ease; }
 .usage-cards.is-loading { opacity: .72; }
 .usage-card { display: flex; flex-direction: column; min-height: 136px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--white); }
 .usage-card__label { margin: 0 0 14px; font-family: var(--mono); font-size: 9px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
@@ -349,6 +349,7 @@ button { cursor: pointer; }
 .billing-detail__panel { margin-top: 12px; }
 .billing-table .usage-table__head, .billing-table .usage-table__row { gap: 12px; }
 .billing-table--tokens .usage-table__head, .billing-table--tokens .usage-table__row { grid-template-columns: 1.4fr .55fr .8fr .8fr 1fr .8fr .75fr .75fr 1.25fr; }
+.billing-table--sessions .usage-table__head, .billing-table--sessions .usage-table__row { grid-template-columns: 1.5fr .5fr 1.1fr .8fr .6fr 1fr; }
 .billing-table--sandboxes .usage-table__head, .billing-table--sandboxes .usage-table__row { grid-template-columns: 1.5fr 1fr .9fr .8fr 1.25fr .75fr .75fr 1.4fr; }
 .billing-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .billing-sandbox { display: grid; gap: 3px; min-width: 0; }

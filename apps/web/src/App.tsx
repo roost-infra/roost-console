@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
 import { redeemEmailTokenHash } from './lib/emailConfirm';
-import { api, type AdminOrg, type AdminOverview, type AdminOverviewDaily, type AdminReferrals, type BillingDetails, type BillingSandboxRow, type BillingTokenRow, type BillingView, type MeResponse, type Order, type Plan, type ReferralOverview, type RelayKey, type UsageDailyRow, type UsageRecentRow, type UsageTotals } from './lib/api';
+import { api, type AdminOrg, type AdminOverview, type AdminOverviewDaily, type AdminReferrals, type BillingDetails, type BillingSandboxRow, type BillingTokenRow, type BillingView, type MeResponse, type Order, type Plan, type ReferralOverview, type RelayKey, type UsageDailyRow, type UsageRecentRow, type UsageSessionRow, type UsageTotals } from './lib/api';
 
 const PRODUCT_LABELS: Record<string, string> = {
   dsalpha: 'dsalpha · 投研工作台',
@@ -865,6 +865,9 @@ function BillingDetailsSection({ token, orgId }: { token: string; orgId: string 
 function UsageDashboard({ token, orgId }: { token: string; orgId: string }) {
   const [days, setDays] = useState(30);
   const [summary, setSummary] = useState<UsageTotals | null>(null);
+  const [sessions, setSessions] = useState<UsageSessionRow[]>([]);
+  const [sessionCount, setSessionCount] = useState(0);
+  const [sessionHitRate, setSessionHitRate] = useState(0);
   const [daily, setDaily] = useState<UsageDailyRow[]>([]);
   const [recent, setRecent] = useState<UsageRecentRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -883,6 +886,9 @@ function UsageDashboard({ token, orgId }: { token: string; orgId: string }) {
       .then(([summaryData, dailyData, recentData]) => {
         if (cancelled) return;
         setSummary(summaryData.totals);
+        setSessions(summaryData.sessions ?? []);
+        setSessionCount(summaryData.session_count ?? 0);
+        setSessionHitRate(summaryData.session_hit_rate ?? 0);
         setDaily(dailyData.days ?? []);
         setRecent(recentData.rows ?? []);
       })
@@ -961,7 +967,10 @@ function UsageDashboard({ token, orgId }: { token: string; orgId: string }) {
           <span>{credits(totals.cache_read_tokens)} cache read · {credits(totals.cache_write_tokens)} write</span>
         </UsageCard>
         <UsageCard label="Cache hit rate" value={percent(totals.cache_hit_rate)}>
-          <span>cache_read / (input + cache_read)</span>
+          <span>全部请求 · cache_read / (input + cache_read)</span>
+        </UsageCard>
+        <UsageCard label="Session cache hit" value={sessionCount > 0 ? percent(sessionHitRate) : '—'}>
+          <span>{credits(sessionCount)} 个会话 · 仅有缓存读的会话</span>
         </UsageCard>
         <UsageCard label="Spend" value={minorCredits(totals.credits_minor)} unit="credits">
           <span>≈ {minorYuan(totals.credits_minor)} · 上游成本 {minorCredits(totals.upstream_cost_minor)} credits</span>
@@ -1053,6 +1062,37 @@ function UsageDashboard({ token, orgId }: { token: string; orgId: string }) {
           )}
         </section>
       </div>
+
+      <section className="usage-panel usage-panel--sessions">
+        <div className="usage-panel__head">
+          <div><p className="kicker">SESSION CACHE</p><h3>会话缓存</h3></div>
+          <span className="tag">Top {sessions.length} · 按 token 排序</span>
+        </div>
+        <div className="usage-table billing-table billing-table--sessions">
+          <div className="usage-table__head">
+            <span>会话</span><span>请求</span><span>Tokens</span><span>Cache read</span><span>命中率</span><span>最后活跃</span>
+          </div>
+          {sessions.length === 0 ? (
+            <div className="usage-table__empty">
+              {loading ? '正在加载会话…' : '这个区间还没有带 session header 的请求（新请求开始记录后显示）。'}
+            </div>
+          ) : sessions.map((row) => (
+            <div className="usage-table__row" key={row.session_id}>
+              <span className="usage-model-name mono" title={row.session_id}>
+                {row.session_id.length > 28 ? `${row.session_id.slice(0, 28)}…` : row.session_id}
+              </span>
+              <span className="mono">{credits(row.requests)}</span>
+              <span className="usage-tokens">
+                <strong>{credits(row.total_tokens)}</strong>
+                <span className="usage-sub">{credits(row.input_tokens)} in · {credits(row.output_tokens)} out</span>
+              </span>
+              <span className="mono">{credits(row.cache_read_tokens)}</span>
+              <span className="mono">{row.cache_read_tokens > 0 ? percent(row.cache_hit_rate) : '—'}</span>
+              <span className="usage-table__time">{new Date(row.last_seen).toLocaleString('zh-CN', { hour12: false })}</span>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <section className="usage-panel usage-panel--recent">
         <div className="usage-panel__head">
