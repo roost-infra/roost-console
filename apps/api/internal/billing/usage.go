@@ -83,9 +83,14 @@ func (s *Store) Reserve(ctx context.Context, orgID, product, runRef string, esti
 	}
 	if capCredits != nil {
 		var used int64
+		// Net the month's metered spend against its refunds. Summing only
+		// negative rows left sandbox refunds out, so a refunded interval still
+		// counted against the product cap. Grants/admin adjustments stay out:
+		// they are not usage, and must not buy cap headroom.
 		if err := tx.QueryRow(ctx, `
 			select coalesce(-sum(delta_credits),0) from billing.ledger
-			where org_id=$1 and product=$2 and delta_credits < 0
+			where org_id=$1 and product=$2
+			  and reason in ('usage','relay_usage','sandbox_usage','sandbox_refund')
 			  and created_at >= date_trunc('month', now())`, orgID, product).Scan(&used); err != nil {
 			return Lease{}, err
 		}
