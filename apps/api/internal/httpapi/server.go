@@ -694,7 +694,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		}
 		order, err = s.store.CreateCustomOrder(r.Context(), org.ID, req.AmountCents)
 	} else {
-		pack, _, err = s.store.Quote(r.Context(), req.SKU)
+		pack, _, err = s.store.QuoteForOrg(r.Context(), org.ID, req.SKU)
 		if err != nil {
 			s.fail(w, err)
 			return
@@ -702,7 +702,15 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		order, err = s.store.CreateOrder(r.Context(), org.ID, req.SKU)
 	}
 	if err != nil {
+		if errors.Is(err, billing.ErrTrialUsed) {
+			writeError(w, http.StatusConflict, "trial_used", "trial already used")
+			return
+		}
 		s.fail(w, err)
+		return
+	}
+	if order.Status == "fulfilled" {
+		writeJSON(w, http.StatusCreated, map[string]any{"order": order})
 		return
 	}
 	if s.cfg.PaymentConfigured() {
@@ -1016,11 +1024,11 @@ func (s *Server) compatCapability(w http.ResponseWriter, _ *http.Request) {
 
 func accessTier(code string) int {
 	switch code {
-	case "max":
+	case "max", "dsalpha_max":
 		return 3
-	case "pro", "byok-pro":
+	case "pro", "byok-pro", "dsalpha_pro":
 		return 2
-	case "starter":
+	case "starter", "dsalpha_plus":
 		return 1
 	default:
 		return 0
@@ -1275,6 +1283,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, billing.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "not found")
+	case errors.Is(err, billing.ErrTrialUsed):
+		writeError(w, http.StatusConflict, "trial_used", "trial already used")
 	case errors.Is(err, billing.ErrInsufficientCredits):
 		writeError(w, http.StatusPaymentRequired, "insufficient_credits", "insufficient credits")
 	case errors.Is(err, billing.ErrProductCap):

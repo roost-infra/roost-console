@@ -30,13 +30,17 @@ type Org struct {
 }
 
 type Plan struct {
-	Code            string           `json:"code"`
-	Name            string           `json:"name"`
-	PriceCents      int              `json:"price_cents"`
-	DurationDays    int              `json:"duration_days"`
-	IncludedCredits int64            `json:"included_credits"`
-	ProductCaps     map[string]int64 `json:"product_caps"`
-	Features        map[string]any   `json:"features"`
+	Code                  string           `json:"code"`
+	Name                  string           `json:"name"`
+	PriceCents            int              `json:"price_cents"`
+	DurationDays          int              `json:"duration_days"`
+	IncludedCredits       int64            `json:"included_credits"`
+	ProductCaps           map[string]int64 `json:"product_caps"`
+	Features              map[string]any   `json:"features"`
+	Product               string           `json:"product"`
+	TrialDays             int              `json:"trial_days"`
+	FirstMonthDiscountBps int              `json:"first_month_discount_bps"`
+	AnnualDiscountBps     int              `json:"annual_discount_bps"`
 }
 
 type Wallet struct {
@@ -140,7 +144,7 @@ func (s *Store) EnsureOrg(ctx context.Context, userID, email string) (Org, error
 	var orgID string
 	if err := tx.QueryRow(ctx, `
 		insert into public.organizations (name, slug, owner_user_id, plan_code)
-		values ($1, $2, $3, 'free') returning id`, name, slug, userID).Scan(&orgID); err != nil {
+		values ($1, $2, $3, 'dsalpha_free') returning id`, name, slug, userID).Scan(&orgID); err != nil {
 		return Org{}, err
 	}
 	if _, err := tx.Exec(ctx, `insert into public.organization_members (org_id, user_id, role) values ($1,$2,'owner')`, orgID, userID); err != nil {
@@ -159,17 +163,17 @@ func (s *Store) EnsureOrg(ctx context.Context, userID, email string) (Org, error
 	}
 	if _, err := tx.Exec(ctx, `
 		insert into billing.subscriptions (org_id, plan_code, status, period_start, period_end)
-		values ($1, 'free', 'active', now(), now() + interval '100 years')
+		values ($1, 'dsalpha_free', 'active', now(), now() + interval '100 years')
 		on conflict (org_id) do nothing`, orgID); err != nil {
 		return Org{}, err
 	}
-	if err := s.applyEntitlements(ctx, tx, orgID, "free"); err != nil {
+	if err := s.applyEntitlements(ctx, tx, orgID, "dsalpha_free"); err != nil {
 		return Org{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Org{}, err
 	}
-	return Org{ID: orgID, Name: name, Slug: slug, PlanCode: "free", Role: "owner"}, nil
+	return Org{ID: orgID, Name: name, Slug: slug, PlanCode: "dsalpha_free", Role: "owner"}, nil
 }
 
 func (s *Store) orgForUser(ctx context.Context, userID string) (Org, error) {
@@ -226,7 +230,7 @@ func (s *Store) Plan(ctx context.Context, code string) (Plan, error) {
 }
 
 func (s *Store) Plans(ctx context.Context) ([]Plan, error) {
-	rows, err := s.Pool.Query(ctx, `select code,name,price_cents,duration_days,included_credits,product_caps,features from billing.plans where active order by sort_order, price_cents`)
+	rows, err := s.Pool.Query(ctx, `select code,name,price_cents,duration_days,included_credits,product_caps,features,product,trial_days,first_month_discount_bps,annual_discount_bps from billing.plans where active order by sort_order, price_cents`)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +239,7 @@ func (s *Store) Plans(ctx context.Context) ([]Plan, error) {
 	for rows.Next() {
 		var p Plan
 		var caps, features []byte
-		if err := rows.Scan(&p.Code, &p.Name, &p.PriceCents, &p.DurationDays, &p.IncludedCredits, &caps, &features); err != nil {
+		if err := rows.Scan(&p.Code, &p.Name, &p.PriceCents, &p.DurationDays, &p.IncludedCredits, &caps, &features, &p.Product, &p.TrialDays, &p.FirstMonthDiscountBps, &p.AnnualDiscountBps); err != nil {
 			return nil, err
 		}
 		_ = jsonUnmarshal(caps, &p.ProductCaps)
@@ -318,8 +322,11 @@ func (s *Store) AlwaysOnActive(ctx context.Context, orgID string) bool {
 // currentPlan lazily expires a paid period. Credits are prepaid and stay in
 // the wallet; only the plan's product caps/validity are revoked.
 func (s *Store) currentPlan(ctx context.Context, orgID, planCode string) (string, error) {
-	if planCode == "free" || planCode == "" {
-		return "free", nil
+	if planCode == "free" || planCode == "dsalpha_free" || planCode == "" {
+		if planCode == "" {
+			planCode = "dsalpha_free"
+		}
+		return planCode, nil
 	}
 	var end time.Time
 	var status string
@@ -338,7 +345,7 @@ func (s *Store) currentPlan(ctx context.Context, orgID, planCode string) (string
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `update public.organizations set plan_code='free',updated_at=now() where id=$1`, orgID); err != nil {
+	if _, err := tx.Exec(ctx, `update public.organizations set plan_code='dsalpha_free',updated_at=now() where id=$1`, orgID); err != nil {
 		return "", err
 	}
 	if _, err := tx.Exec(ctx, `update billing.subscriptions set status='expired',updated_at=now() where org_id=$1`, orgID); err != nil {
@@ -347,7 +354,7 @@ func (s *Store) currentPlan(ctx context.Context, orgID, planCode string) (string
 	if _, err := tx.Exec(ctx, `delete from billing.entitlements where org_id=$1`, orgID); err != nil {
 		return "", err
 	}
-	if err := s.applyEntitlements(ctx, tx, orgID, "free"); err != nil {
+	if err := s.applyEntitlements(ctx, tx, orgID, "dsalpha_free"); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -362,7 +369,7 @@ func (s *Store) applyEntitlements(ctx context.Context, tx pgx.Tx, orgID, planCod
 		return err
 	}
 	var validUntil *time.Time
-	if planCode != "free" && plan.DurationDays > 0 {
+	if plan.DurationDays > 0 {
 		var end time.Time
 		if err := tx.QueryRow(ctx, `select period_end from billing.subscriptions where org_id=$1`, orgID).Scan(&end); err == nil {
 			validUntil = &end

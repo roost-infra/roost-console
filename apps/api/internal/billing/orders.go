@@ -14,10 +14,14 @@ import (
 )
 
 type CreditPack struct {
-	SKU         string
-	AmountCents int
-	Credits     int64
-	Title       string
+	SKU          string
+	AmountCents  int
+	Credits      int64
+	Title        string
+	DurationDays int
+	PlanCode     string
+	Trial        bool
+	Annual       bool
 }
 
 // AlwaysOnSKU buys the always-on sandbox add-on. It carries no credits: its
@@ -26,14 +30,62 @@ type CreditPack struct {
 const AlwaysOnSKU = "addon_always_on_30d"
 
 var CreditPacks = map[string]CreditPack{
-	"credit_50":  {"credit_50", 5000, 5000, "Roost 5,000 credits"},
-	"credit_100": {"credit_100", 10000, 10000, "Roost 10,000 credits"},
-	"credit_500": {"credit_500", 50000, 50000, "Roost 50,000 credits"},
+	"credit_50":  {SKU: "credit_50", AmountCents: 5000, Credits: 5000, Title: "Roost 5,000 credits"},
+	"credit_100": {SKU: "credit_100", AmountCents: 10000, Credits: 10000, Title: "Roost 10,000 credits"},
+	"credit_500": {SKU: "credit_500", AmountCents: 50000, Credits: 50000, Title: "Roost 50,000 credits"},
 	// Token packs are the same credit balance, sold under a token-first name.
-	"token_50":  {"token_50", 5000, 5000, "Roost 5,000 token credits"},
-	"token_100": {"token_100", 10000, 10000, "Roost 10,000 token credits"},
-	"token_500": {"token_500", 50000, 50000, "Roost 50,000 token credits"},
-	AlwaysOnSKU: {AlwaysOnSKU, 4900, 0, "Roost Always-on · 30 days"},
+	"token_50":  {SKU: "token_50", AmountCents: 5000, Credits: 5000, Title: "Roost 5,000 token credits"},
+	"token_100": {SKU: "token_100", AmountCents: 10000, Credits: 10000, Title: "Roost 10,000 token credits"},
+	"token_500": {SKU: "token_500", AmountCents: 50000, Credits: 50000, Title: "Roost 50,000 token credits"},
+	AlwaysOnSKU: {SKU: AlwaysOnSKU, AmountCents: 4900, Credits: 0, Title: "Roost Always-on · 30 days"},
+}
+
+// ErrTrialUsed is returned when an organization already consumed its trial.
+var ErrTrialUsed = errors.New("trial already used")
+
+// planSKU is the parsed shape of plan_<code>_30d / plan_<code>_365d /
+// trial_<code>_7d. Code may itself contain underscores, so the duration is the
+// final underscore-separated token.
+type planSKU struct {
+	Code   string
+	Days   int
+	Trial  bool
+	Annual bool
+}
+
+func parsePlanSKU(sku string) (planSKU, bool) {
+	prefix, trial := "plan_", false
+	if strings.HasPrefix(sku, "trial_") {
+		prefix, trial = "trial_", true
+	}
+	if !strings.HasPrefix(sku, prefix) {
+		return planSKU{}, false
+	}
+	rest := strings.TrimPrefix(sku, prefix)
+	i := strings.LastIndex(rest, "_")
+	if i <= 0 {
+		return planSKU{}, false
+	}
+	code, suffix := rest[:i], rest[i+1:]
+	var days int
+	switch suffix {
+	case "30d":
+		days = 30
+	case "365d":
+		days = 365
+	case "7d":
+		days = 7
+	default:
+		return planSKU{}, false
+	}
+	return planSKU{Code: code, Days: days, Trial: trial, Annual: days >= 365}, true
+}
+
+func trialCredits(plan Plan) int64 {
+	if v, ok := plan.Features["trial_credits"].(float64); ok && v > 0 {
+		return int64(v)
+	}
+	return 0
 }
 
 func randomTradeNo() string {
@@ -43,20 +95,77 @@ func randomTradeNo() string {
 }
 
 // Quote returns the server-side price and credits for a SKU. Client input never
-// supplies either value.
+// supplies either value. It is the org-less form kept for tests; HTTP and order
+// creation use QuoteForOrg so first-month/trial discounts can be evaluated.
 func (s *Store) Quote(ctx context.Context, sku string) (CreditPack, string, error) {
+	return s.QuoteForOrg(ctx, "", sku)
+}
+
+// QuoteForOrg prices a SKU for one organization. Plan SKUs:
+//
+//	plan_<code>_30d   monthly; first paid plan gets the first-month discount
+//	plan_<code>_365d  annual; 12 months at the plan's annual discount
+//	trial_<code>_7d   free trial once per org, with trial_credits
+func (s *Store) QuoteForOrg(ctx context.Context, orgID, sku string) (CreditPack, string, error) {
 	if pack, ok := CreditPacks[sku]; ok {
 		return pack, "credits", nil
 	}
-	if strings.HasPrefix(sku, "plan_") && strings.HasSuffix(sku, "_30d") {
-		code := strings.TrimSuffix(strings.TrimPrefix(sku, "plan_"), "_30d")
-		plan, err := s.Plan(ctx, code)
-		if err != nil {
+	parsed, ok := parsePlanSKU(sku)
+	if !ok {
+		return CreditPack{}, "", ErrNotFound
+	}
+	plan, err := s.Plan(ctx, parsed.Code)
+	if err != nil {
+		return CreditPack{}, "", err
+	}
+	days := parsed.Days
+	if days == 0 {
+		days = plan.DurationDays
+	}
+	amount := plan.PriceCents
+	credits := plan.IncludedCredits
+	if parsed.Trial {
+		if orgID != "" {
+			var used bool
+			if err := s.Pool.QueryRow(ctx, `
+				select exists(select 1 from billing.orders
+					where org_id=$1 and sku like 'trial_%'
+					  and status not in ('expired','failed'))`, orgID).Scan(&used); err != nil {
+				return CreditPack{}, "", err
+			}
+			if used {
+				return CreditPack{}, "", ErrTrialUsed
+			}
+		}
+		amount = 0
+		credits = trialCredits(plan)
+	} else if parsed.Annual {
+		bps := plan.AnnualDiscountBps
+		amount = int((int64(plan.PriceCents)*12*(10000-int64(bps)) + 5000) / 10000)
+		credits = plan.IncludedCredits * 12
+	} else if orgID != "" {
+		var paidBefore bool
+		if err := s.Pool.QueryRow(ctx, `
+			select exists(select 1 from billing.orders
+				where org_id=$1 and status='fulfilled'
+				  and sku like 'plan_%' and amount_cents > 0)`, orgID).Scan(&paidBefore); err != nil {
 			return CreditPack{}, "", err
 		}
-		return CreditPack{SKU: sku, AmountCents: plan.PriceCents, Credits: plan.IncludedCredits, Title: "Roost " + plan.Name + " · 30 days"}, "plan:" + code, nil
+		if !paidBefore && plan.FirstMonthDiscountBps > 0 {
+			bps := plan.FirstMonthDiscountBps
+			amount = int((int64(plan.PriceCents)*(10000-int64(bps)) + 5000) / 10000)
+		}
 	}
-	return CreditPack{}, "", ErrNotFound
+	title := "Roost " + plan.Name
+	if parsed.Trial {
+		title += " · 7 天试用"
+	} else if parsed.Annual {
+		title += " · 年付"
+	} else {
+		title += " · 30 天"
+	}
+	return CreditPack{SKU: sku, AmountCents: amount, Credits: credits, Title: title,
+		DurationDays: days, PlanCode: parsed.Code, Trial: parsed.Trial, Annual: parsed.Annual}, "plan:" + parsed.Code, nil
 }
 
 // Custom top-up: the user chooses the amount, and credits are 1:1 with cents
@@ -101,7 +210,7 @@ func (s *Store) CreateCustomOrder(ctx context.Context, orgID string, amountCents
 }
 
 func (s *Store) CreateOrder(ctx context.Context, orgID, sku string) (Order, error) {
-	pack, kind, err := s.Quote(ctx, sku)
+	pack, kind, err := s.QuoteForOrg(ctx, orgID, sku)
 	if err != nil {
 		return Order{}, err
 	}
@@ -117,7 +226,7 @@ func (s *Store) CreateOrder(ctx context.Context, orgID, sku string) (Order, erro
 		if err != nil {
 			return Order{}, err
 		}
-		if effective != "pro" && effective != "max" {
+		if effective != "pro" && effective != "max" && effective != "dsalpha_pro" && effective != "dsalpha_max" {
 			return Order{}, ErrAddonNotEligible
 		}
 	}
@@ -129,7 +238,64 @@ func (s *Store) CreateOrder(ctx context.Context, orgID, sku string) (Order, erro
 		orgID, randomTradeNo(), sku, pack.AmountCents, pack.Credits,
 	).Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.CreatedAt)
 	_ = kind
-	return o, err
+	if err != nil {
+		return Order{}, err
+	}
+	if pack.Trial {
+		if err := s.activateTrial(ctx, o, pack); err != nil {
+			return Order{}, err
+		}
+		o.Status = "fulfilled"
+	}
+	return o, nil
+}
+
+// activateTrial fulfils a zero-amount trial order without the payment provider.
+// Trial credits are a bounded feature (trial_credits), never the plan's full
+// monthly allowance.
+func (s *Store) activateTrial(ctx context.Context, o Order, pack CreditPack) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := tx.QueryRow(ctx, `select status from billing.orders where id=$1 for update`, o.ID).Scan(&o.Status); err != nil {
+		return err
+	}
+	if o.Status == "fulfilled" {
+		return nil
+	}
+	if pack.Credits > 0 {
+		if _, err := tx.Exec(ctx, `
+			insert into billing.ledger (org_id,product,delta_credits,reason,ref_id,idempotency_key)
+			values ($1,'dsalpha',$2,'trial_grant',$3,$4)
+			on conflict (idempotency_key) do nothing`, o.OrgID, pack.Credits, o.ID, "trial:"+o.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `update billing.wallets set balance_credits=balance_credits+$2,version=version+1,updated_at=now() where org_id=$1`, o.OrgID, pack.Credits); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into billing.subscriptions (org_id,plan_code,status,period_start,period_end,source_order_id)
+		values ($1,$2,'active',now(),now()+make_interval(days=>$3),$4)
+		on conflict (org_id) do update set
+			plan_code=excluded.plan_code,status='active',
+			period_start=now(),period_end=excluded.period_end,
+			source_order_id=excluded.source_order_id,updated_at=now()`,
+		o.OrgID, pack.PlanCode, pack.DurationDays, o.ID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `update public.organizations set plan_code=$2,updated_at=now() where id=$1`, o.OrgID, pack.PlanCode); err != nil {
+		return err
+	}
+	if err := s.applyEntitlements(ctx, tx, o.OrgID, pack.PlanCode); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `update billing.orders set status='fulfilled',fulfilled_at=now(),updated_at=now() where id=$1`, o.ID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) AttachPayment(ctx context.Context, orderID, providerOrderID, qrURL, payURL string) error {
@@ -227,12 +393,9 @@ func (s *Store) Fulfill(ctx context.Context, orderID, providerTradeNo string, am
 			return err
 		}
 	}
-	if strings.HasPrefix(o.SKU, "plan_") {
-		code := strings.TrimSuffix(strings.TrimPrefix(o.SKU, "plan_"), "_30d")
-		var duration int
-		if err := tx.QueryRow(ctx, `select duration_days from billing.plans where code=$1`, code).Scan(&duration); err != nil {
-			return err
-		}
+	if parsed, ok := parsePlanSKU(o.SKU); ok && !parsed.Trial {
+		code := parsed.Code
+		duration := parsed.Days
 		if duration <= 0 {
 			duration = 30
 		}
@@ -243,7 +406,12 @@ func (s *Store) Fulfill(ctx context.Context, orderID, providerTradeNo string, am
 				plan_code=excluded.plan_code,
 				status='active',
 				period_start=now(),
-				period_end=greatest(billing.subscriptions.period_end, now()) + make_interval(days=>$3),
+				period_end=case
+					when billing.subscriptions.plan_code=excluded.plan_code
+					     and billing.subscriptions.period_end > now()
+					then billing.subscriptions.period_end + make_interval(days=>$3)
+					else now() + make_interval(days=>$3)
+				end,
 				source_order_id=excluded.source_order_id,
 				updated_at=now()`, o.OrgID, code, duration, o.ID); err != nil {
 			return err

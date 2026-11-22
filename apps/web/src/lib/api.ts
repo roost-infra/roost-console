@@ -6,6 +6,10 @@ export interface Plan {
   included_credits: number;
   product_caps: Record<string, number>;
   features: Record<string, unknown>;
+  product: string;
+  trial_days: number;
+  first_month_discount_bps: number;
+  annual_discount_bps: number;
 }
 
 export interface ProductState {
