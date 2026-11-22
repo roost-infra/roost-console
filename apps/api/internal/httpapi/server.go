@@ -1108,6 +1108,32 @@ func (s *Server) compatCapability(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+func specScopes(code string) []string {
+	switch code {
+	case "dsalpha_plus":
+		return []string{"workspace:spec:performance"}
+	case "dsalpha_pro", "dsalpha_max", "pro", "max", "byok-pro":
+		return []string{"workspace:spec:performance", "workspace:spec:max"}
+	default:
+		return nil
+	}
+}
+
+func isSpecQuota(check string) bool {
+	return check == "spec_performance" || check == "spec_max" || check == "spec_xlarge"
+}
+
+func planAllowsSpec(code, check string) bool {
+	switch check {
+	case "spec_performance":
+		return code == "dsalpha_plus" || code == "dsalpha_pro" || code == "dsalpha_max" || code == "pro" || code == "max" || code == "byok-pro"
+	case "spec_max":
+		return code == "dsalpha_pro" || code == "dsalpha_max" || code == "byok-pro"
+	default:
+		return false
+	}
+}
+
 func accessTier(code string) int {
 	switch code {
 	case "max", "dsalpha_max":
@@ -1148,9 +1174,23 @@ func (s *Server) compatValidate(w http.ResponseWriter, r *http.Request) {
 		"used_credits": e.Balance - e.Available, "credit_limit": e.Balance,
 		"remaining_credits": e.Available, "message": "Roost 积分不足，请充值",
 	}
-	scopes := make([]string, 0, 1)
+	scopes := make([]string, 0, 3)
 	if s.store.AlwaysOnActive(r.Context(), org.ID) {
 		scopes = append(scopes, "workspace:always_on")
+	}
+	scopes = append(scopes, specScopes(e.PlanCode)...)
+
+	// Elevated computer sizes are scope-gated, not credit-gated. The Console
+	// plan owns which sizes exist; dslalpha enforces them through these scopes
+	// and the spec_* count quota names. A missing scope is why every paid plan
+	// looked like Small-only in the picker.
+	if isSpecQuota(req.CheckQuota) {
+		allowed := planAllowsSpec(e.PlanCode, req.CheckQuota)
+		quota = map[string]any{
+			"allowed": allowed, "limit_type": req.CheckQuota,
+			"capacity_used": 0, "capacity_limit": map[bool]int{true: -1, false: 0}[allowed],
+			"message": "当前套餐不包含该电脑规格，请升级套餐",
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_tier": accessTier(e.PlanCode), "plan_display_name": e.PlanCode,
