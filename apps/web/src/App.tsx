@@ -1255,38 +1255,57 @@ function Recharge({ current, alwaysOnUntil, onBuy, busy }: { current: string; al
 }
 
 function Plans({ plans, current, alwaysOnUntil, onBuy, busy }: { plans: Plan[]; current: string; alwaysOnUntil?: string | null; onBuy: (sku: string) => void; busy: string }) {
+  const visible = plans.filter((plan) => plan.product === 'dsalpha' && plan.code !== 'dsalpha_free');
   return (
     <section className="section" id="plans">
       <div className="section__head">
         <div>
-          <p className="kicker">PLANS</p>
-          <h2>按月给组织充值。</h2>
+          <p className="kicker">DSALPHA PLANS</p>
+          <h2>DSAlpha 套餐。</h2>
         </div>
-        <p className="section__intro">虎皮椒单次支付，30 天有效；到期前提醒，不自动扣款。</p>
+        <p className="section__intro">7 天免费试用；首月 5 折；年付 85 折。套餐额度按月发放，超出后可用通用积分。</p>
       </div>
       <div className="plan-grid">
-        {plans.filter((plan) => plan.code !== 'free').map((plan) => {
-          const featured = plan.code === 'pro';
+        {visible.map((plan) => {
+          const featured = plan.code === 'dsalpha_pro';
+          const monthly = plan.price_cents;
+          const annual = Math.round(monthly * 12 * (10000 - plan.annual_discount_bps) / 10000);
+          const firstMonth = Math.round(monthly * (10000 - plan.first_month_discount_bps) / 10000);
+          const trialSku = `trial_${plan.code}_7d`;
+          const monthlySku = `plan_${plan.code}_30d`;
+          const annualSku = `plan_${plan.code}_365d`;
           return (
             <article className={`plan-card ${featured ? 'plan-card--featured' : ''}`} key={plan.code}>
-              {featured && <span className="plan-card__badge">推荐</span>}
+              {featured && <span className="plan-card__badge">最受欢迎</span>}
               <div className="plan-card__head">
-                <h3>{planLabel(plan.code)}</h3>
-                <span className="tag">{plan.duration_days} 天</span>
+                <h3>{plan.name.replace('DSAlpha ', '')}</h3>
+                <span className="tag">{plan.trial_days > 0 ? `${plan.trial_days} 天试用` : '月付'}</span>
               </div>
               <div className="plan-card__price">
-                <strong>{yuan(plan.price_cents)}</strong>
-                <span>/ 30 天</span>
+                <strong>{yuan(monthly)}</strong>
+                <span>/ 月</span>
               </div>
-              <p className="muted">{credits(plan.included_credits)} credits · 全产品可用</p>
+              <p className="muted">
+                <s>{yuan(firstMonth)}</s> 首月 · 年付 {yuan(annual)}
+              </p>
+              <p className="muted">{credits(plan.included_credits)} credits / 月 · DSAlpha 专用</p>
               <ul className="plan-list">
-                {Object.entries(plan.product_caps).map(([product, cap]) => (
-                  <li key={product}><span>{PRODUCT_LABELS[product]?.split(' · ')[0] ?? product}</span><span>{credits(cap)}</span></li>
-                ))}
+                <li><span>工作区</span><span>{String(plan.features.workspaces ?? '—')}</span></li>
+                <li><span>定时任务</span><span>{String(plan.features.scheduled_tasks ?? '—')}</span></li>
+                <li><span>BYOK</span><span>{plan.features.byok ? '支持' : '—'}</span></li>
+                <li><span>模型档位</span><span>tier {String(plan.features.model_tier ?? 0)}</span></li>
               </ul>
-              <button className={`btn ${featured ? 'btn--accent' : 'btn--ink'} btn--wide`} disabled={busy === `plan_${plan.code}_30d` || current === plan.code} onClick={() => onBuy(`plan_${plan.code}_30d`)}>
-                {current === plan.code ? '当前套餐' : busy === `plan_${plan.code}_30d` ? '创建订单…' : '购买'}
+              <button className={`btn ${featured ? 'btn--accent' : 'btn--ink'} btn--wide`} disabled={busy === monthlySku || current === plan.code} onClick={() => onBuy(monthlySku)}>
+                {current === plan.code ? '当前套餐' : busy === monthlySku ? '创建订单…' : `月付 ${yuan(firstMonth)}（首月）`}
               </button>
+              <button className="btn btn--ghost btn--wide" disabled={busy === annualSku} onClick={() => onBuy(annualSku)}>
+                {busy === annualSku ? '创建订单…' : `年付 ${yuan(annual)}`}
+              </button>
+              {plan.trial_days > 0 && (
+                <button className="btn btn--ghost btn--wide" disabled={busy === trialSku} onClick={() => onBuy(trialSku)}>
+                  {busy === trialSku ? '开通中…' : `开始 ${plan.trial_days} 天免费试用`}
+                </button>
+              )}
             </article>
           );
         })}
