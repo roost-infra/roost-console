@@ -1073,6 +1073,14 @@ func (s *Server) withCompatService(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "forbidden", "service scope does not allow this endpoint")
 			return
 		}
+		// Capability is a deployment-level probe: it has no user and its
+		// answer is the same for every user, so it authenticates as the
+		// service only. Every lease call does need the user.
+		if r.URL.Path == "/api/auth/billing/leases/capability" {
+			r.Body = io.NopCloser(strings.NewReader(string(body)))
+			next(w, r)
+			return
+		}
 		userID := strings.TrimSpace(r.Header.Get("X-User-Id"))
 		if userID == "" {
 			// Older first-party builds carry the user in the body (the legacy
