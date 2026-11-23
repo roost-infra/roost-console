@@ -437,6 +437,7 @@ var serviceScopes = map[string][]string{
 		"/api/auth/validate",
 		"/api/auth/billing/leases",
 		"/internal/v1/orgs/resolve-user",
+		"/internal/v1/usage/charge",
 		"/internal/v1/usage/sandbox",
 	},
 	"causal":      {"/internal/v1/usage/charge"},
