@@ -21,7 +21,7 @@ func TestServiceScopes(t *testing.T) {
 		{"dslpha", "POST", "/api/auth/validate", true},
 		{"dslpha", "POST", "/api/auth/billing/leases/acquire", true},
 		{"dslpha", "POST", "/internal/v1/orgs/resolve-user", true},
-		{"dslpha", "POST", "/internal/v1/usage/charge", false},
+		{"dslpha", "POST", "/internal/v1/usage/charge", true},
 		{"dslpha", "POST", "/internal/v1/usage/sandbox", true},
 		{"causal", "POST", "/internal/v1/usage/sandbox", false},
 		{"causal", "POST", "/internal/v1/usage/charge", true},
