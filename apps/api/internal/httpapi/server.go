@@ -1170,10 +1170,16 @@ func (s *Server) compatValidate(w http.ResponseWriter, r *http.Request) {
 		allowed = true
 		limitType = "workspace_limit"
 	}
+	monthlyUsed, err := s.store.MonthlyUsage(r.Context(), org.ID, "dsalpha")
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	quota := map[string]any{
 		"allowed": allowed, "limit_type": limitType,
-		"used_credits": e.Balance - e.Available, "credit_limit": e.Balance,
-		"remaining_credits": e.Available, "message": "Roost 积分不足，请充值",
+		"used_credits": monthlyUsed, "credit_limit": e.Balance,
+		"remaining_credits": e.Available, "reserved_credits": e.Reserved,
+		"message": "Roost 积分不足，请充值",
 	}
 	scopes := make([]string, 0, 3)
 	if s.store.AlwaysOnActive(r.Context(), org.ID) {

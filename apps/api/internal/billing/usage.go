@@ -49,6 +49,19 @@ func (s *Store) Resolve(ctx context.Context, orgID, product string) (Entitlement
 	return e, nil
 }
 
+// MonthlyUsage is the product's metered spend this calendar month, net of
+// refunds. Grants and admin adjustments are not usage and are excluded, the
+// same definition Reserve uses for the product cap.
+func (s *Store) MonthlyUsage(ctx context.Context, orgID, product string) (int64, error) {
+	var used int64
+	err := s.Pool.QueryRow(ctx, `
+		select coalesce(-sum(delta_credits),0) from billing.ledger
+		where org_id=$1 and product=$2
+		  and reason in ('usage','relay_usage','sandbox_usage','sandbox_refund')
+		  and created_at >= date_trunc('month', now())`, orgID, product).Scan(&used)
+	return used, err
+}
+
 func (s *Store) Reserve(ctx context.Context, orgID, product, runRef string, estimated int64, ttl time.Duration) (Lease, error) {
 	if estimated < 0 {
 		return Lease{}, errors.New("estimated credits must be >= 0")
