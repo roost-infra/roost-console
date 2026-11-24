@@ -910,12 +910,24 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "payment_unavailable", "USDT checkout is not available")
 			return
 		}
-		order, err = s.store.CreateUSDTOrder(r.Context(), org.ID, req.SKU,
-			int64(pack.AmountCents), pack.Credits, payment.ProviderOKXUSDT,
-			quote.Chain, quote.Address, quote.Amount, quote.AmountMicro, quote.Rate, quote.ExpiresAt)
-		if err != nil {
-			s.fail(w, err)
-			return
+		// A unique index closes the race between quoting and inserting, so a
+		// collision here is expected under concurrency: quote again.
+		for attempt := 0; ; attempt++ {
+			order, err = s.store.CreateUSDTOrder(r.Context(), org.ID, req.SKU,
+				int64(pack.AmountCents), pack.Credits, payment.ProviderOKXUSDT,
+				quote.Chain, quote.Address, quote.Amount, quote.AmountMicro, quote.Rate, quote.ExpiresAt)
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, billing.ErrUSDTAmountTaken) || attempt >= 4 {
+				s.fail(w, err)
+				return
+			}
+			quote, err = s.usdtQuote(r.Context(), quote.Chain, int64(pack.AmountCents))
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"order": order})
 		return

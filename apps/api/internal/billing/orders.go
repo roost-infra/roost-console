@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type CreditPack struct {
@@ -39,6 +40,10 @@ var CreditPacks = map[string]CreditPack{
 	"token_500": {SKU: "token_500", AmountCents: 50000, Credits: 50000, Title: "Roost 50,000 token credits"},
 	AlwaysOnSKU: {SKU: AlwaysOnSKU, AmountCents: 4900, Credits: 0, Title: "Roost Always-on · 30 days"},
 }
+
+// ErrUSDTAmountTaken means another open order already quotes this exact USDT
+// amount; the caller should quote a different suffix and retry.
+var ErrUSDTAmountTaken = errors.New("usdt amount already in use")
 
 // ErrTrialUsed is returned when an organization already consumed its trial.
 var ErrTrialUsed = errors.New("trial already used")
@@ -583,6 +588,11 @@ func (s *Store) CreateUSDTOrder(ctx context.Context, orgID, sku string, amountCe
 		orgID, randomTradeNo(), sku, amountCents, credits, provider, raw,
 	).Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &o.CreatedAt)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			// Another order took this amount between the check and the insert.
+			return Order{}, ErrUSDTAmountTaken
+		}
 		return Order{}, err
 	}
 	o.USDT = &USDTInstruction{
