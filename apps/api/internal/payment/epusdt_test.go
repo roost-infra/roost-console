@@ -194,7 +194,7 @@ func signedNotification(t *testing.T, mutate func(map[string]any)) []byte {
 }
 
 func TestEPUSDTParseNotification(t *testing.T) {
-	n, err := epusdtClient("http://gateway").ParseNotification(signedNotification(t, nil))
+	n, err := epusdtClient("http://127.0.0.1:8000").ParseNotification(signedNotification(t, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestEPUSDTParseNotification(t *testing.T) {
 }
 
 func TestEPUSDTParseNotificationRejectsForgeries(t *testing.T) {
-	client := epusdtClient("http://gateway")
+	client := epusdtClient("http://127.0.0.1:8000")
 	valid := signedNotification(t, nil)
 
 	tampered := []byte(strings.Replace(string(valid), `"amount":19.99`, `"amount":1999.99`, 1))
@@ -216,7 +216,7 @@ func TestEPUSDTParseNotificationRejectsForgeries(t *testing.T) {
 		t.Fatal("fixture did not change")
 	}
 	unsigned := []byte(`{"pid":"1000","order_id":"ORDER1","amount":19.99,"status":2}`)
-	otherSecret := &EPUSDT{APIBase: "http://gateway", PID: "1000", SecretKey: "other"}
+	otherSecret := &EPUSDT{APIBase: "http://127.0.0.1:8000", PID: "1000", SecretKey: "other"}
 	// Correctly signed, but for a different merchant on the same gateway key.
 	otherPID := signedNotification(t, func(p map[string]any) { p["pid"] = "2000" })
 
@@ -230,5 +230,33 @@ func TestEPUSDTParseNotificationRejectsForgeries(t *testing.T) {
 	}
 	if _, err := client.ParseNotification([]byte(`not json`)); err == nil || errors.Is(err, ErrBadSignature) {
 		t.Fatalf("malformed body: err = %v", err)
+	}
+}
+
+func TestValidGatewayBase(t *testing.T) {
+	cases := map[string]bool{
+		"http://127.0.0.1:8000":   true,
+		"http://localhost:8000":   true,
+		"http://[::1]:8000":       true,
+		"https://pay.example.com": true,
+		"http://pay.example.com":  false,
+		"http://10.0.0.5:8000":    false,
+		"https://":                false,
+		"":                        false,
+		"ftp://127.0.0.1":         false,
+	}
+	for base, want := range cases {
+		if got := ValidGatewayBase(base); got != want {
+			t.Errorf("ValidGatewayBase(%q) = %v, want %v", base, got, want)
+		}
+	}
+	// A rejected base disables the whole channel rather than sending the
+	// reconciliation query over a forgeable transport.
+	c := &EPUSDT{APIBase: "http://pay.example.com", PID: "1000", SecretKey: "k"}
+	if c.Configured() {
+		t.Fatal("a plain-HTTP remote gateway must not be treated as configured")
+	}
+	if _, err := c.Status(context.Background(), "T1"); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("err = %v", err)
 	}
 }

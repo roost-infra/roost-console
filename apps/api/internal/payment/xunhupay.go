@@ -71,6 +71,11 @@ func Sign(values url.Values, secret string) string {
 }
 
 func Verify(values url.Values, secret string) bool {
+	// An unset secret would make the hash forgeable by anyone, so it can never
+	// count as a valid signature.
+	if secret == "" {
+		return false
+	}
 	got := strings.ToLower(strings.TrimSpace(values.Get("hash")))
 	if got == "" {
 		return false

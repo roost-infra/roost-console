@@ -157,6 +157,30 @@ func TestReconcileLeavesUnconfiguredProvidersAlone(t *testing.T) {
 	}
 }
 
+func TestReconcileStillCatchesALateSettlementOfAnExpiredOrder(t *testing.T) {
+	// The gateway's checkout expired before the transfer confirmed, so the row
+	// reads 'expired' locally; the money still arrives. Asking about it must
+	// credit the order, and a gateway that agrees it expired must not touch it.
+	expired := cryptoOrder("late", "GW-late")
+	expired.Status = "expired"
+	gone := cryptoOrder("gone", "GW-gone")
+	gone.Status = "expired"
+	store := &reconcileFake{orders: []billing.Order{expired, gone}}
+	gateway := &fakeEPUSDT{statuses: map[string]int{
+		"GW-late": payment.EPUSDTStatusPaid, "GW-gone": payment.EPUSDTStatusExpired,
+	}}
+	reconcileOrders(context.Background(), store, orderGateways{epusdt: gateway}, quietLog())
+	if got, ok := store.fulfilled["late"]; !ok || got.amount != 5000 {
+		t.Fatalf("late settlement not credited: %v", store.fulfilled)
+	}
+	if len(store.fulfilled) != 1 {
+		t.Fatalf("fulfilled = %v", store.fulfilled)
+	}
+	if len(store.closed) != 0 {
+		t.Fatalf("an already-expired order was closed again: %v", store.closed)
+	}
+}
+
 func TestReconcileBacksOffWhenTheGatewayFails(t *testing.T) {
 	store := &reconcileFake{orders: []billing.Order{cryptoOrder("crypto", "GW-1")}}
 	gateway := &fakeEPUSDT{err: errors.New("connection refused")}

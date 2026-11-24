@@ -54,7 +54,7 @@ curl -X POST https://www.roostbots.com/console-api/v1/admin/orders/<orderID>/ful
 
 | 变量 | 说明 |
 | --- | --- |
-| `EPUSDT_API_BASE` | 网关的服务间地址，如 `http://127.0.0.1:8000` |
+| `EPUSDT_API_BASE` | 网关的服务间地址，如 `http://127.0.0.1:8000`；**非本机地址必须用 https**，明文 http 会被拒绝并关闭通道（对账结果无签名，只能靠传输层可信） |
 | `EPUSDT_PID` / `EPUSDT_SECRET_KEY` | 网关后台「API 密钥」里的 PID 与 secret_key（secret，不入库不提交） |
 | `EPUSDT_NOTIFY_URL` | `https://www.roostbots.com/console-api/v1/payments/epusdt/notify`，必须公网可达 |
 | `EPUSDT_RETURN_URL` | 可选，支付完成后跳回的控制台地址 |
