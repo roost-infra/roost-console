@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestRelayControlCORSAllowsPut(t *testing.T) {
+	const origin = "https://console.example"
+	handler := New(config.Config{ConsoleOrigin: origin}, nil, nil, nil, nil).Handler()
+	request := httptest.NewRequest(http.MethodOptions, "/v1/orgs/org/relay/preferences/personal", nil)
+	request.Header.Set("Origin", origin)
+	request.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || !strings.Contains(response.Header().Get("Access-Control-Allow-Methods"), http.MethodPut) {
+		t.Fatalf("preflight = %d; methods = %s", response.Code, response.Header().Get("Access-Control-Allow-Methods"))
+	}
+}
 
 func TestRelayControlSignedRoutesDB(t *testing.T) {
 	dsn := os.Getenv("ROOST_TEST_DATABASE_URL")

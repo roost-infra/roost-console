@@ -100,9 +100,10 @@ export interface Order {
 const API = (import.meta.env.VITE_API_URL as string | undefined) ?? '';
 
 async function request<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const timeout = AbortSignal.timeout(15000);
   const response = await fetch(`${API}${path}`, {
     ...init,
-    signal: init?.signal ?? AbortSignal.timeout(15000),
+    signal: init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
