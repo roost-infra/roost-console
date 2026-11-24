@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
 import { redeemEmailTokenHash } from './lib/emailConfirm';
+import { CopyButton, CopyField, DSALPHA_URL, EndpointList, KeyCreatedModal, MEMORY_MCP_URL, MODELS_URL, RELAY_BASE_URL, SnippetTabs } from './access';
+import { Brand, Icon, Sidebar, Topbar, useRoute } from './shell';
 import { api, type AdminOrg, type AdminOverview, type AdminOverviewDaily, type AdminReferrals, type BillingDetails, type BillingSandboxRow, type BillingTokenRow, type BillingView, type MeResponse, type Order, type Plan, type ReferralOverview, type RelayKey, type UsageDailyRow, type UsageRecentRow, type UsageSessionRow, type UsageTotals } from './lib/api';
 
 const PRODUCT_LABELS: Record<string, string> = {
@@ -17,48 +19,40 @@ const CREDIT_PACKS = [
   { sku: 'token_500', label: '50,000 credits', price: '¥500', note: '≈ DeepSeek V4-Pro 252M 输入 tokens，全产品通用' },
 ];
 
-const WORKSPACES = [
+const LABS = [
   {
     key: 'sandbox',
-    meta: 'WORKSPACE',
-    title: 'Roost Sandbox',
-    desc: '创建云电脑、打开 Terminal、管理快照和规格。',
+    meta: 'SANDBOX · 实验性',
+    title: 'Roost Sandbox 云电脑',
+    desc: '给 Agent 用的隔离 Linux 环境：Terminal、文件、快照与规格。面向开发者，普通使用不需要开通。',
     action: '打开 Sandbox',
     href: '/market/sandboxes?sso=1&next=%2Fsandboxes',
   },
   {
     key: 'market',
-    meta: 'MARKET',
-    title: 'Roost Market',
-    desc: 'Provider 节点、租约、上架容量与收益。',
+    meta: 'MARKET · 实验性',
+    title: 'Roost Market 算力市场',
+    desc: 'Provider 节点接入、租约、上架容量与收益结算。',
     action: '进入 Market',
     href: '/market/?sso=1&next=%2Fmarket',
   },
-  {
-    key: 'billing',
-    meta: 'ORGANIZATION',
-    title: '组织与账单',
-    desc: '余额、套餐、订单、用量与发票。',
-    action: '查看账单',
-    href: '#billing',
-  },
 ];
 
-function Workspaces() {
+function LabsPage() {
   return (
-    <section className="workspaces" aria-labelledby="workspaces-title">
-      <div className="workspaces__head">
+    <section className="section" aria-labelledby="labs-title">
+      <div className="section__head">
         <div>
-          <p className="kicker">START HERE</p>
-          <h2 id="workspaces-title">一个组织，四个工作台。</h2>
+          <p className="kicker">LABS</p>
+          <h2 id="labs-title">沙箱与算力</h2>
         </div>
-        <p className="workspaces__intro">
-          所有工作台共享同一个组织、同一份余额和同一套凭证。从这里进入，不用再记多个账号。
+        <p className="section__intro">
+          面向开发者的底层能力，仍在迭代。它们和其他产品共用同一个组织余额，按实际运行时长计费。
         </p>
       </div>
       <div className="workspace-grid">
-        {WORKSPACES.map((item) => (
-          <a className="workspace-card" href={item.href} key={item.key}>
+        {LABS.map((item) => (
+          <a className="workspace-card glass" href={item.href} key={item.key}>
             <div className="workspace-card__top">
               <span className="workspace-card__meta">{item.meta}</span>
               <span className="workspace-card__arrow" aria-hidden="true">→</span>
@@ -193,16 +187,7 @@ function ledgerReasonLabel(reason: string) {
 }
 
 function Logo() {
-  return (
-    <a className="brand" href="/" aria-label="Roost Console">
-      <span className="brand__mark" aria-hidden="true">
-        <span />
-        <span />
-      </span>
-      <span className="brand__name">roost</span>
-      <span className="brand__tag">console</span>
-    </a>
-  );
+  return <Brand />;
 }
 
 function AuthScreen({ initialError = '' }: { initialError?: string }) {
@@ -289,22 +274,22 @@ function AuthScreen({ initialError = '' }: { initialError?: string }) {
         <Logo />
         <div className="auth__story-body">
           <p className="eyebrow"><span className="dot" /> ONE ORGANIZATION</p>
-          <h1>一个账号，<br /><span>所有工作台。</span></h1>
+          <h1>一个 Key，<br /><span>所有主流模型。</span></h1>
           <p className="auth__lead">
-            Roost 组织统一账号、积分和账单。注册之后，Sandbox、Market、dsalpha、causal-memory
-            共用同一份余额，不用再分别充值。
+            注册即得 API Key：Claude、GPT、Gemini、DeepSeek、Kimi、GLM 统一 OpenAI / Anthropic 兼容接口。
+            同一份余额还能用于 DSAlpha 投研和 Agent 记忆。
           </p>
           <div className="auth__ledger">
             <div className="auth__ledger-head">
-              <span>org_roost</span>
+              <span>roost · api</span>
               <span className="tag tag--live">active</span>
             </div>
-            <div className="auth__ledger-row"><span>余额</span><strong>12,480 credits</strong></div>
-            <div className="auth__ledger-row"><span>产品</span><span>sandbox · market · dsalpha · causal-memory</span></div>
-            <div className="auth__ledger-row"><span>账单</span><span>一个组织，一份账单</span></div>
+            <div className="auth__ledger-row"><span>Base URL</span><strong className="mono">api.roostbots.com/v1</strong></div>
+            <div className="auth__ledger-row"><span>产品</span><span>API 中转 · DSAlpha · 记忆</span></div>
+            <div className="auth__ledger-row"><span>计费</span><span>按量扣费 · 100 credits = ¥1</span></div>
           </div>
         </div>
-        <p className="auth__foot">Roost Cloud · 统一控制面</p>
+        <p className="auth__foot">Roost · AI 模型中转与智能体平台</p>
       </section>
       <section className="auth__pane">
         <div className="auth__form-wrap">
@@ -357,29 +342,6 @@ function AuthScreen({ initialError = '' }: { initialError?: string }) {
   );
 }
 
-function Header({ email, onSignOut }: { email: string; onSignOut: () => void }) {
-  return (
-    <header className="topbar">
-      <Logo />
-      <nav className="topbar__nav">
-        <a href="/market/sandboxes?sso=1&next=%2Fsandboxes">Sandbox</a>
-        <a href="/market/?sso=1&next=%2Fmarket">Market</a>
-        <a className="active" href="#billing">账单</a>
-        <a href="#billing-details">扣费明细</a>
-        <a href="#usage">用量</a>
-        <a href="#products">产品</a>
-        <a href="#recharge">充值</a>
-        <a href="#plans">套餐</a>
-        <a href="#orders">订单</a>
-      </nav>
-      <div className="topbar__right">
-        <span className="who">{email}</span>
-        <button className="btn btn--ghost btn--small" onClick={onSignOut}>退出</button>
-      </div>
-    </header>
-  );
-}
-
 function WalletCard({ billing }: { billing: BillingView }) {
   return (
     <section className="wallet" id="billing">
@@ -399,8 +361,9 @@ function WalletCard({ billing }: { billing: BillingView }) {
       <div className="wallet__side">
         <p className="mono">ORG_ID</p>
         <code>{billing.org.id}</code>
-        <div className="wallet__side-row"><span>组织</span><strong>{billing.org.name}</strong></div>
+        <div className="wallet__side-row"><span>组织</span><strong>{displayOrgName(billing.org.name, '')}</strong></div>
         <div className="wallet__side-row"><span>角色</span><strong>{billing.org.role || 'owner'}</strong></div>
+        <CopyButton text={billing.org.id} label="复制组织 ID" className="wallet__copy" />
       </div>
     </section>
   );
@@ -473,48 +436,204 @@ function ReferralCard({ token, version }: { token: string; version: number }) {
   );
 }
 
-function Products({ billing }: { billing: BillingView }) {
+// The three products ordinary users come for. Sandbox/Market live under Labs.
+const CORE_PRODUCTS = [
+  {
+    key: 'relay',
+    usageKeys: ['relay'],
+    name: 'API 中转',
+    tagline: 'Claude、GPT、Gemini、DeepSeek、Kimi、GLM 一个 Key 全部可用，价格低于官方。',
+    cta: '获取 API Key',
+    href: '#/keys',
+    external: false,
+  },
+  {
+    key: 'dsalpha',
+    usageKeys: ['dsalpha', 'dslpha'],
+    name: 'DSAlpha 投研',
+    tagline: 'AI 投研工作台：行情、研报、因子与定时任务，开箱即用。',
+    cta: '打开 DSAlpha',
+    href: DSALPHA_URL,
+    external: true,
+  },
+  {
+    key: 'memory',
+    usageKeys: ['causal-memory'],
+    name: '记忆 Memory',
+    tagline: '给 Agent 的长期记忆。通过 MCP 接入 Claude Code、Cursor 等客户端。',
+    cta: '接入记忆',
+    href: '#/memory',
+    external: false,
+  },
+] as const;
+
+const SAMPLE_MODELS = ['deepseek-v4-pro', 'claude-sonnet-5', 'gpt-6-sol', 'gemini-3.1-pro'];
+
+function productUsage(billing: BillingView, keys: readonly string[]) {
+  return billing.products
+    .filter((row) => keys.includes(row.product))
+    .reduce((sum, row) => sum + row.used_this_month, 0);
+}
+
+function Overview({ me, token }: { me: MeResponse; token: string }) {
+  const orgId = me.org.id;
+  const [keys, setKeys] = useState<RelayKey[] | null>(null);
+  const [week, setWeek] = useState<UsageTotals | null>(null);
+  const [created, setCreated] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    api.relayKeys(token, orgId)
+      .then((data) => { if (!cancelled) setKeys((data.tokens ?? []).filter((k) => !k.revoked_at)); })
+      .catch(() => { if (!cancelled) setKeys([]); });
+    api.usageSummary(token, orgId, 7)
+      .then((data) => { if (!cancelled) setWeek(data.totals); })
+      .catch(() => { /* the overview stays usable without analytics */ });
+    return () => { cancelled = true; };
+  }, [token, orgId]);
+
+  async function createKey() {
+    setBusy(true);
+    setError('');
+    try {
+      const data = await api.createRelayKey(token, orgId);
+      setCreated(data.token);
+      const list = await api.relayKeys(token, orgId);
+      setKeys((list.tokens ?? []).filter((k) => !k.revoked_at));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建 API Key 失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const wallet = me.billing.wallet;
+  const hasKey = (keys?.length ?? 0) > 0;
+  const weekTotals = week ?? EMPTY_USAGE_TOTALS;
+
   return (
-    <section className="section" id="products">
-      <div className="section__head">
-        <div>
-          <p className="kicker">PRODUCTS</p>
-          <h2>一个余额，所有产品。</h2>
+    <div className="overview">
+      <section className="hero glass">
+        <div className="hero__text">
+          <p className="kicker">欢迎回来 · {displayOrgName(me.org.name, '')}</p>
+          <h1>{hasKey ? '一切就绪，开始调用吧。' : '3 步开始调用 Roost API'}</h1>
+          <p className="hero__lead">
+            一个账号、一份余额，覆盖 API 中转、DSAlpha 与记忆。所有接入信息都在这一页。
+          </p>
         </div>
-        <p className="section__intro">每个产品共享组织钱包，同时有独立的月度上限，避免一个任务吃光所有积分。</p>
+        <div className="hero__actions">
+          <a className="btn btn--accent" href="#/keys"><Icon name="keys" size={16} />API Key 与接入</a>
+          <a className="btn btn--glass" href={MODELS_URL} target="_blank" rel="noreferrer">模型与价格</a>
+        </div>
+      </section>
+
+      <div className="ov-grid">
+        <section className="quickstart glass" aria-labelledby="qs-title">
+          <div className="card-head">
+            <div>
+              <p className="kicker">QUICK START</p>
+              <h2 id="qs-title">接入 API 中转</h2>
+            </div>
+            <a className="text-link" href="#/keys">完整接入代码 →</a>
+          </div>
+          {error && <p className="form-error">{error}</p>}
+          <ol className="steps">
+            <li className={`step ${hasKey ? 'is-done' : ''}`}>
+              <span className="step__num">1</span>
+              <div className="step__body">
+                <h3>创建 API Key</h3>
+                {keys === null ? (
+                  <p className="muted">正在读取 Key…</p>
+                ) : hasKey ? (
+                  <p className="muted">已有 {keys.length} 个可用 Key。完整 Key 只在创建时显示，丢失可再建一个。</p>
+                ) : (
+                  <p className="muted">Key 用来鉴权和计费，消费组织余额。</p>
+                )}
+              </div>
+              <div className="step__action">
+                {hasKey ? (
+                  <a className="btn btn--ghost btn--small" href="#/keys">管理 Key</a>
+                ) : (
+                  <button className="btn btn--accent btn--small" onClick={() => void createKey()} disabled={busy || keys === null}>
+                    {busy ? '创建中…' : '创建 API Key'}
+                  </button>
+                )}
+              </div>
+            </li>
+            <li className="step">
+              <span className="step__num">2</span>
+              <div className="step__body">
+                <h3>填入 Base URL</h3>
+                <p className="muted">在客户端的 “Base URL / API 地址” 里填：</p>
+                <CopyField value={RELAY_BASE_URL} hint="Claude Code、Anthropic SDK 填 https://api.roostbots.com（不带 /v1）" />
+              </div>
+            </li>
+            <li className="step">
+              <span className="step__num">3</span>
+              <div className="step__body">
+                <h3>选择模型</h3>
+                <p className="muted">模型名直接写进请求的 <code className="inline-code">model</code> 字段，点击复制：</p>
+                <div className="chips">
+                  {SAMPLE_MODELS.map((model) => <CopyButton key={model} text={model} label={model} className="chip" />)}
+                  <a className="chip chip--link" href={MODELS_URL} target="_blank" rel="noreferrer">全部模型 →</a>
+                </div>
+              </div>
+            </li>
+          </ol>
+        </section>
+
+        <section className="balance glass" aria-labelledby="bal-title">
+          <p className="kicker" id="bal-title">可用余额</p>
+          <div className="balance__amount">
+            <strong>{credits(wallet.available_credits)}</strong>
+            <span>credits</span>
+          </div>
+          <p className="balance__cash">≈ ¥{(wallet.available_credits / 100).toFixed(2)} · 所有产品共用</p>
+          <a className="btn btn--ink btn--wide" href="#/wallet">充值</a>
+          <div className="balance__stats">
+            <div><span>近 7 天消费</span><strong>{minorCredits(weekTotals.credits_minor)}</strong></div>
+            <div><span>近 7 天请求</span><strong>{credits(weekTotals.requests)}</strong></div>
+            <div><span>近 7 天 Tokens</span><strong>{tokens(weekTotals.total_tokens)}</strong></div>
+          </div>
+          <a className="text-link" href="#/usage">查看用量详情 →</a>
+        </section>
       </div>
-      <div className="product-grid">
-        {billing.products.map((product) => {
-          const cap = product.monthly_cap_credits ?? 0;
-          const pct = cap > 0 ? Math.min(100, Math.round((product.used_this_month / cap) * 100)) : 0;
-          const href =
-            product.product === 'market' ? '/market/?sso=1&next=%2Fmarket' :
-            product.product === 'causal-memory' ? 'https://causal-memory.com' :
-            product.product === 'dslpha' ? 'https://dsalpha.roostbots.com' :
-            undefined;
-          const body = (
-            <>
+
+      <section className="section" aria-labelledby="prod-title">
+        <div className="section__head">
+          <div>
+            <p className="kicker">PRODUCTS</p>
+            <h2 id="prod-title">我的产品</h2>
+          </div>
+          <p className="section__intro">所有产品共用组织余额，本月用量按产品分别统计。</p>
+        </div>
+        <div className="product-grid">
+          {CORE_PRODUCTS.map((product) => (
+            <a
+              className={`product-card glass product-card--${product.key}`}
+              href={product.href}
+              key={product.key}
+              target={product.external ? '_blank' : undefined}
+              rel={product.external ? 'noreferrer' : undefined}
+            >
               <div className="product-card__head">
-                <span className={`product-dot product-dot--${product.product}`} />
-                <span className="tag">{product.enabled ? 'enabled' : 'disabled'}</span>
+                <span className={`product-icon product-icon--${product.key}`}>
+                  <Icon name={product.key === 'relay' ? 'keys' : product.key} size={18} />
+                </span>
+                <span className="product-card__usage">本月 {credits(productUsage(me.billing, product.usageKeys))} credits</span>
               </div>
-              <h3>{PRODUCT_LABELS[product.product] ?? product.product}</h3>
-              <p className="muted">共享余额，按实际用量扣费。</p>
-              <div className="bar"><span style={{ width: `${pct}%` }} /></div>
-              <div className="product-card__foot">
-                <span>{credits(product.used_this_month)} / {cap ? credits(cap) : '不限'}</span>
-                <span>{pct}%</span>
-              </div>
-            </>
-          );
-          return href ? (
-            <a className="product-card product-card--link" href={href} key={product.product}>{body}</a>
-          ) : (
-            <article className="product-card" key={product.product}>{body}</article>
-          );
-        })}
-      </div>
-    </section>
+              <h3>{product.name}</h3>
+              <p className="muted">{product.tagline}</p>
+              <span className="product-card__cta">{product.cta} →</span>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      {created && <KeyCreatedModal apiKey={created} onClose={() => setCreated('')} />}
+    </div>
   );
 }
 
@@ -1163,15 +1282,15 @@ function CausalMemory({ token, orgId }: { token: string; orgId: string }) {
   }
 
   return (
-    <section className="causal" id="causal-memory">
+    <section className="causal glass" id="causal-memory">
       <div>
-        <p className="kicker">CAUSAL MEMORY · MCP</p>
-        <h2>把记忆接到 Agent。</h2>
+        <p className="kicker">MEMORY · MCP</p>
+        <h2>把长期记忆接到 Agent</h2>
         <p className="muted">
-          用组织 token 连接 Causal Memory MCP。调用和存储按组织额度计费，
-          与 market、dsalpha 共用同一个钱包。
+          生成一个 MCP Token，把下面的地址加到 Claude Code、Cursor 等支持 MCP 的客户端，
+          Agent 就能跨会话记住项目、偏好和结论。调用和存储从组织余额扣费。
         </p>
-        <code className="causal__endpoint">https://causal-memory.com/memory/mcp</code>
+        <CopyField label="MCP 地址" value={MEMORY_MCP_URL} />
       </div>
       <div className="causal__action">
         {mcpToken ? (
@@ -1180,6 +1299,9 @@ function CausalMemory({ token, orgId }: { token: string; orgId: string }) {
             <code className="causal__token">{mcpToken}</code>
             <button className="btn btn--ghost btn--small" onClick={() => void copy()}>{copied ? '已复制' : '复制 token'}</button>
             <p className="muted causal__hint">在 MCP 客户端里配置 Authorization: Bearer &lt;token&gt;</p>
+            <pre className="snippet__code causal__config"><code>{`claude mcp add --transport http roost-memory \\
+  ${MEMORY_MCP_URL} \\
+  --header "Authorization: Bearer ${mcpToken}"`}</code></pre>
           </>
         ) : (
           <button className="btn btn--ink" onClick={() => void issue()} disabled={busy}>{busy ? '生成中…' : '生成 MCP Token'}</button>
@@ -1395,22 +1517,26 @@ function OrderModal({ token, order, onClose, onPaid }: { token: string; order: O
 
 function RelayKeys({ token, orgId }: { token: string; orgId: string }) {
   const [keys, setKeys] = useState<RelayKey[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState('');
   const [created, setCreated] = useState('');
+  const [confirming, setConfirming] = useState('');
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     try {
       const data = await api.relayKeys(token, orgId);
-      setKeys(data.tokens ?? []);
+      setKeys((data.tokens ?? []).filter((k) => !k.revoked_at));
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载 API Key 失败');
+    } finally {
+      setLoaded(true);
     }
   }, [token, orgId]);
   useEffect(() => { void load(); }, [load]);
 
   async function create() {
-    setBusy('create'); setError(''); setCreated('');
+    setBusy('create'); setError('');
     try {
       const data = await api.createRelayKey(token, orgId);
       setCreated(data.token);
@@ -1421,46 +1547,83 @@ function RelayKeys({ token, orgId }: { token: string; orgId: string }) {
   }
   async function revoke(hash: string) {
     setBusy(hash); setError('');
-    try { await api.revokeRelayKey(token, orgId, hash); await load(); }
+    try { await api.revokeRelayKey(token, orgId, hash); setConfirming(''); await load(); }
     catch (err) { setError(err instanceof Error ? err.message : '吊销失败'); }
     finally { setBusy(''); }
   }
 
   return (
-    <section className="section" id="api-keys">
-      <div className="section__head">
-        <div><p className="kicker">API KEYS</p><h2>模型中转 Key。</h2></div>
-        <p className="section__intro">用于 OpenAI 兼容接口；Key 只在创建时显示一次，消费共享组织 token 余额。</p>
-      </div>
-      {error && <p className="form-error">{error}</p>}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
-        <button className="btn btn--accent" onClick={() => void create()} disabled={busy === 'create'}>
-          {busy === 'create' ? '创建中…' : '创建 API Key'}
-        </button>
-        {created && (
-          <code style={{ padding: '8px 12px', background: 'rgba(255,255,255,.06)', borderRadius: 8, wordBreak: 'break-all' }}>
-            {created}
-          </code>
-        )}
-      </div>
-      <div className="table">
-        <div className="table__row table__row--head"><span>Key（hash）</span><span>创建时间</span><span>最近使用</span><span>操作</span></div>
-        {keys.length === 0 && <div className="table__empty">还没有 API Key。</div>}
-        {keys.map((k) => (
-          <div className="table__row" key={k.token_hash}>
-            <span className="mono">{k.token_hash.slice(0, 16)}…</span>
-            <span>{new Date(k.created_at).toLocaleString('zh-CN')}</span>
-            <span>{k.last_used_at ? new Date(k.last_used_at).toLocaleString('zh-CN') : '—'}</span>
-            <span>
-              <button className="btn btn--ghost" disabled={busy === k.token_hash} onClick={() => void revoke(k.token_hash)}>吊销</button>
-            </span>
+    <div className="keys-page">
+      <section className="access glass" aria-labelledby="access-title">
+        <div className="card-head">
+          <div>
+            <p className="kicker">ENDPOINTS · 接入地址</p>
+            <h2 id="access-title">一个 Key，三种接法</h2>
           </div>
-        ))}
-      </div>
-    </section>
+          <p className="section__intro">按你用的客户端选一个地址，填进它的 Base URL 字段，再填 API Key 即可。</p>
+        </div>
+        <EndpointList />
+      </section>
+
+      <section className="section glass panel" id="api-keys" aria-labelledby="keys-title">
+        <div className="card-head">
+          <div>
+            <p className="kicker">API KEYS</p>
+            <h2 id="keys-title">我的 API Key</h2>
+          </div>
+          <button className="btn btn--accent" onClick={() => void create()} disabled={busy === 'create'}>
+            {busy === 'create' ? '创建中…' : '+ 创建 API Key'}
+          </button>
+        </div>
+        <p className="muted keys-note">Key 消费组织共享余额。完整 Key 只在创建时显示一次，列表里只保留指纹；泄露或丢失请吊销后重建。</p>
+        {error && <p className="form-error">{error}</p>}
+        <div className="table table--keys">
+          <div className="table__row table__row--head"><span>Key 指纹</span><span>创建时间</span><span>最近使用</span><span>状态</span><span /></div>
+          {!loaded && <div className="table__empty">正在加载…</div>}
+          {loaded && keys.length === 0 && (
+            <div className="table__empty table__empty--cta">
+              <span>还没有 API Key，创建一个就能开始调用。</span>
+              <button className="btn btn--accent btn--small" onClick={() => void create()} disabled={busy === 'create'}>创建第一个 Key</button>
+            </div>
+          )}
+          {keys.map((k) => (
+            <div className="table__row" key={k.token_hash}>
+              <span className="mono">rk-…{k.token_hash.slice(0, 10)}</span>
+              <span>{new Date(k.created_at).toLocaleString('zh-CN', { hour12: false })}</span>
+              <span>{k.last_used_at ? new Date(k.last_used_at).toLocaleString('zh-CN', { hour12: false }) : '从未使用'}</span>
+              <span><span className="status status--paid">可用</span></span>
+              <span className="table__actions">
+                {confirming === k.token_hash ? (
+                  <>
+                    <button className="btn btn--danger btn--small" disabled={busy === k.token_hash} onClick={() => void revoke(k.token_hash)}>
+                      {busy === k.token_hash ? '吊销中…' : '确认吊销'}
+                    </button>
+                    <button className="btn btn--ghost btn--small" onClick={() => setConfirming('')}>取消</button>
+                  </>
+                ) : (
+                  <button className="btn btn--ghost btn--small" onClick={() => setConfirming(k.token_hash)}>吊销</button>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="section glass panel" aria-labelledby="code-title">
+        <div className="card-head">
+          <div>
+            <p className="kicker">EXAMPLES</p>
+            <h2 id="code-title">接入示例</h2>
+          </div>
+          <a className="text-link" href={MODELS_URL} target="_blank" rel="noreferrer">查看全部模型与价格 →</a>
+        </div>
+        <SnippetTabs />
+      </section>
+
+      {created && <KeyCreatedModal apiKey={created} onClose={() => setCreated('')} />}
+    </div>
   );
 }
-
 
 const ADMIN_RANGES = [7, 30, 90];
 
@@ -2243,6 +2406,8 @@ function Console({ session }: { session: Session }) {
   const [claimError, setClaimError] = useState('');
   const [referralVersion, setReferralVersion] = useState(0);
   const claimAttemptRef = useRef('');
+  const [route] = useRoute();
+  const [navOpen, setNavOpen] = useState(false);
   const token = session.access_token;
 
   const load = useCallback(async () => {
@@ -2322,47 +2487,102 @@ function Console({ session }: { session: Session }) {
     );
   }
 
+  const isAdmin = me.user.email === '963841621@qq.com';
+  const isOwner = me.org.role === 'owner';
+  const page = route === 'admin' && !isAdmin ? 'overview' : route;
+
+  let body: ReactNode;
+  switch (page) {
+    case 'keys':
+      body = <RelayKeys token={token} orgId={me.org.id} />;
+      break;
+    case 'usage':
+      body = <UsageDashboard token={token} orgId={me.org.id} />;
+      break;
+    case 'memory':
+      body = <CausalMemory token={token} orgId={me.org.id} />;
+      break;
+    case 'dsalpha':
+      body = (
+        <>
+          <section className="hero hero--compact glass">
+            <div className="hero__text">
+              <p className="kicker">DSALPHA</p>
+              <h1>DSAlpha 投研工作台</h1>
+              <p className="hero__lead">行情、研报、因子与定时任务。套餐额度按月发放，用完后自动使用通用余额。</p>
+            </div>
+            <div className="hero__actions">
+              <a className="btn btn--accent" href={DSALPHA_URL} target="_blank" rel="noreferrer">打开 DSAlpha →</a>
+            </div>
+          </section>
+          <Plans plans={plans} current={me.billing.plan.code} alwaysOnUntil={me.billing.always_on_until} onBuy={buy} busy={busy} />
+        </>
+      );
+      break;
+    case 'wallet':
+      body = (
+        <>
+          <WalletCard billing={me.billing} />
+          <Recharge current={me.billing.plan.code} alwaysOnUntil={me.billing.always_on_until} onBuy={buy} busy={busy} />
+        </>
+      );
+      break;
+    case 'billing':
+      body = (
+        <>
+          <BillingDetailsSection token={token} orgId={me.org.id} />
+          <Orders orders={orders} />
+        </>
+      );
+      break;
+    case 'referral':
+      body = isOwner
+        ? <ReferralCard token={token} version={referralVersion} />
+        : <p className="muted">只有组织所有者可以邀请好友。</p>;
+      break;
+    case 'labs':
+      body = <LabsPage />;
+      break;
+    case 'admin':
+      body = <AdminPanel token={token} />;
+      break;
+    default:
+      body = <Overview me={me} token={token} />;
+  }
+
   return (
-    <div className="app">
-      <Header email={me.user.email} onSignOut={() => void supabase.auth.signOut()} />
-      <main className="page">
-        <div className="page__intro">
-          <div>
-            <p className="kicker">ORGANIZATION</p>
-            <h1>{displayOrgName(me.org.name, "")}</h1>
-          </div>
-          <p className="page__intro-note">一个组织 ID，贯穿 Sandbox、Market、dsalpha 与 causal-memory。积分与凭证实时共享。</p>
-        </div>
-        {error && <p className="form-error">{error}</p>}
-        {claimNotice && (
-          <div className="form-notice claim-notice" role="status">
-            <span>{claimNotice}</span>
-            <button className="btn btn--ghost btn--small" type="button" onClick={() => setClaimNotice('')}>知道了</button>
-          </div>
-        )}
-        {claimError && (
-          <div className="form-notice form-notice--warn claim-notice" role="status">
-            <span>{claimError}</span>
-            <button className="btn btn--ghost btn--small" type="button" onClick={() => setClaimError('')}>关闭</button>
-          </div>
-        )}
-        <Workspaces />
-        <WalletCard billing={me.billing} />
-        <Recharge current={me.billing.plan.code} alwaysOnUntil={me.billing.always_on_until} onBuy={buy} busy={busy} />
-        {me.org.role === 'owner' && <ReferralCard token={token} version={referralVersion} />}
-        <BillingDetailsSection token={token} orgId={me.org.id} />
-        <Products billing={me.billing} />
-        <UsageDashboard token={token} orgId={me.org.id} />
-        <RelayKeys token={token} orgId={me.org.id} />
-        {me.user.email === '963841621@qq.com' && <AdminPanel token={token} />}
-        <CausalMemory token={token} orgId={me.org.id} />
-        <Plans plans={plans} current={me.billing.plan.code} alwaysOnUntil={me.billing.always_on_until} onBuy={buy} busy={busy} />
-        <Orders orders={orders} />
-        <footer className="page__foot">
-          <span>© 2026 Roost · 统一控制面</span>
-          <span>100 credits = ¥1 · 虎皮椒单次支付</span>
-        </footer>
-      </main>
+    <div className="shell">
+      <div className="backdrop" aria-hidden="true" />
+      <Sidebar route={page} isAdmin={isAdmin} isOwner={isOwner} open={navOpen} onClose={() => setNavOpen(false)} />
+      <div className="shell__main">
+        <Topbar
+          route={page}
+          email={me.user.email}
+          availableCredits={me.billing.wallet.available_credits}
+          onMenu={() => setNavOpen(true)}
+          onSignOut={() => void supabase.auth.signOut()}
+        />
+        <main className="page" key={page}>
+          {error && <p className="form-error">{error}</p>}
+          {claimNotice && (
+            <div className="form-notice claim-notice" role="status">
+              <span>{claimNotice}</span>
+              <button className="btn btn--ghost btn--small" type="button" onClick={() => setClaimNotice('')}>知道了</button>
+            </div>
+          )}
+          {claimError && (
+            <div className="form-notice form-notice--warn claim-notice" role="status">
+              <span>{claimError}</span>
+              <button className="btn btn--ghost btn--small" type="button" onClick={() => setClaimError('')}>关闭</button>
+            </div>
+          )}
+          {body}
+          <footer className="page__foot">
+            <span>© 2026 Roost</span>
+            <span>100 credits = ¥1 · 支付宝 / 微信支付</span>
+          </footer>
+        </main>
+      </div>
       {pendingOrder && <OrderModal token={token} order={pendingOrder} onClose={() => setPendingOrder(null)} onPaid={paid} />}
     </div>
   );
