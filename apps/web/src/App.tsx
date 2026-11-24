@@ -1514,7 +1514,7 @@ function PaymentMethodModal({ methods, onPick, onClose }: { methods: PaymentMeth
       <div className="modal__panel" ref={panelRef}>
         <button className="modal__close" onClick={onClose} aria-label="关闭">×</button>
         <p className="kicker">PAYMENT</p>
-        <h2>选择支付方式ZZZ</h2>
+        <h2>选择支付方式</h2>
         <div className="pay-methods">
           {methods.map((method) => (
             <button className="pay-method" key={method} type="button" onClick={() => onPick(method)}>

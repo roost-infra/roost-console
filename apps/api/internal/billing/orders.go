@@ -539,10 +539,13 @@ func (s *Store) ListReconcileOrders(ctx context.Context, minAge time.Duration, l
 // TouchOrderReconcile records when the reconciler last queried the provider so
 // an unpaid order is not re-queried every tick.
 func (s *Store) TouchOrderReconcile(ctx context.Context, orderID string) error {
+	// 'expired' is included because those orders stay reconcilable for a while
+	// (see ListReconcileOrders); without a marker they would be picked first
+	// on every tick and crowd out the orders behind them.
 	_, err := s.Pool.Exec(ctx, `
 		update billing.orders
 		set raw = raw || jsonb_build_object('reconcile_at', now()), updated_at=now()
-		where id=$1 and status='pending'`, orderID)
+		where id=$1 and status in ('pending','expired')`, orderID)
 	return err
 }
 

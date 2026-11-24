@@ -53,12 +53,12 @@ func startPaymentJobs(ctx context.Context, cfg config.Config, store *billing.Sto
 			defer cancel()
 			// Reconcile before expiring: a paid order whose notify was lost must
 			// be fulfilled while it can still be queried, not closed as stale.
-			if cfg.PaymentConfigured() || cfg.EPUSDTConfigured() {
+			if cfg.PaymentConfigured() || epusdt != nil {
 				var gateways orderGateways
 				if cfg.PaymentConfigured() {
 					gateways.xunhu = pay
 				}
-				if cfg.EPUSDTConfigured() {
+				if epusdt != nil {
 					gateways.epusdt = epusdt
 				}
 				reconcileOrders(runCtx, store, gateways, log)
@@ -254,10 +254,15 @@ func main() {
 		APIBase: cfg.EPUSDTAPIBase, PID: cfg.EPUSDTPID, SecretKey: cfg.EPUSDTSecretKey,
 		NotifyURL: cfg.EPUSDTNotifyURL, ReturnURL: cfg.EPUSDTReturnURL,
 	}
-	if cfg.EPUSDTAPIBase != "" && !payment.ValidGatewayBase(cfg.EPUSDTAPIBase) {
-		// Refuse to trust an unauthenticated status answer over cleartext to
-		// another host; see payment.ValidGatewayBase.
-		log.Error("epusdt disabled: EPUSDT_API_BASE must be https, or http on this machine", "base", cfg.EPUSDTAPIBase)
+	// Configured() runs the same address check the client applies per call, so a
+	// rejected base disables the channel everywhere: the API is handed no
+	// client, which hides the method from /v1/billing/plans and refuses it at
+	// checkout instead of failing later with a 502.
+	if !epusdt.Configured() {
+		if cfg.EPUSDTAPIBase != "" {
+			log.Error("epusdt disabled: check EPUSDT_API_BASE (https, or http on this machine), EPUSDT_PID, EPUSDT_SECRET_KEY and EPUSDT_NOTIFY_URL", "base", cfg.EPUSDTAPIBase)
+		}
+		epusdt = nil
 	}
 	srv := httpapi.New(cfg, store, verifier, pay, epusdt, log)
 	startPaymentJobs(context.Background(), cfg, store, pay, epusdt, log)
