@@ -171,10 +171,6 @@ func (s *Store) RelaySettleV2(ctx context.Context, in RelaySettleInput) (RelayOp
 	if in.SettlementID == "" {
 		in.SettlementID = in.IdempotencyKey
 	}
-	startedAt := in.StartedAt
-	if startedAt.IsZero() {
-		startedAt = time.Now()
-	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return RelayOperation{}, err
@@ -191,13 +187,14 @@ func (s *Store) RelaySettleV2(ctx context.Context, in RelaySettleInput) (RelayOp
 		orgID, requestID, status                string
 		leasePriceVersion, leaseSettingsVersion string
 		reserved                                int64
+		leaseCreatedAt                          time.Time
 	)
 	if err := tx.QueryRow(ctx, `
 		select org_id::text,run_ref,reserved_credits,status,
-		       coalesce(price_version,''),coalesce(settings_version,'')
+		       coalesce(price_version,''),coalesce(settings_version,''),created_at
 		from billing.usage_leases
 		where id=$1 and product='relay' for update`, in.ReservationID).
-		Scan(&orgID, &requestID, &reserved, &status, &leasePriceVersion, &leaseSettingsVersion); err != nil {
+		Scan(&orgID, &requestID, &reserved, &status, &leasePriceVersion, &leaseSettingsVersion, &leaseCreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return RelayOperation{}, ErrRelayNotFound
 		}
@@ -213,6 +210,17 @@ func (s *Store) RelaySettleV2(ctx context.Context, in RelaySettleInput) (RelayOp
 	// again would corrupt the wallet's reserved total.
 	if status == "expired" {
 		reserved = 0
+	}
+	// Tier and peak are priced at the request start. When the caller did not
+	// report one, the reservation time is the best known approximation; using
+	// the settle time would silently miss a peak window for a request that
+	// started inside it.
+	startedAt := in.StartedAt
+	if startedAt.IsZero() {
+		startedAt = leaseCreatedAt
+	}
+	if startedAt.IsZero() {
+		startedAt = time.Now()
 	}
 	requestPriceVersion := strings.TrimSpace(in.PriceVersion)
 	if leasePriceVersion != "" && requestPriceVersion != "" && requestPriceVersion != leasePriceVersion {
@@ -283,10 +291,11 @@ func (s *Store) RelaySettleV2(ctx context.Context, in RelaySettleInput) (RelayOp
 	if charged > 0 {
 		tag, err := tx.Exec(ctx, `
 			insert into billing.ledger
-				(org_id,product,delta_credits,reason,ref_id,idempotency_key,policy_version,settings_version)
-			values ($1,'relay',$2,'relay_usage',$3,$4,$5,$6)
+				(org_id,product,delta_credits,reason,ref_id,idempotency_key,
+				 policy_version,settings_version,amount_minor)
+			values ($1,'relay',$2,'relay_usage',$3,$4,$5,$6,$7)
 			on conflict (idempotency_key) do nothing`,
-			orgID, -charged, in.ReservationID, in.IdempotencyKey, priceVersion, settingsVersion)
+			orgID, -charged, in.ReservationID, in.IdempotencyKey, priceVersion, settingsVersion, charge.AmountMinor)
 		if err != nil {
 			return RelayOperation{}, err
 		}
@@ -369,11 +378,13 @@ func relaySettleV2Replay(ctx context.Context, tx pgx.Tx, idempotencyKey string) 
 		policyVersion, settingsVersion string
 		refID                          string
 		booked                         int64
+		pricedMinor                    *int64
 	)
 	err := tx.QueryRow(ctx, `
-		select delta_credits, coalesce(ref_id,''), coalesce(policy_version,''), coalesce(settings_version,'')
+		select delta_credits, coalesce(ref_id,''), coalesce(policy_version,''),
+		       coalesce(settings_version,''), amount_minor
 		from billing.ledger where idempotency_key=$1`, idempotencyKey).
-		Scan(&booked, &refID, &policyVersion, &settingsVersion)
+		Scan(&booked, &refID, &policyVersion, &settingsVersion, &pricedMinor)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RelayOperation{}, false, nil
 	}
@@ -386,10 +397,13 @@ func relaySettleV2Replay(ctx context.Context, tx pgx.Tx, idempotencyKey string) 
 		Status:          "settled",
 		ReservationID:   refID,
 		Amount:          -booked,
-		AmountMinor:     -booked * MinorPerCredit,
+		AmountMinor:     -booked * MinorPerCredit, // fallback for rows written before amount_minor existed
 		PolicyVersion:   policyVersion,
 		SettingsVersion: settingsVersion,
 		Debts:           []Debt{},
+	}
+	if pricedMinor != nil {
+		op.AmountMinor = *pricedMinor
 	}
 	if refID == "" {
 		return op, true, nil

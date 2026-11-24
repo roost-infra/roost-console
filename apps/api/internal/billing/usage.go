@@ -487,13 +487,14 @@ func (s *Store) SettleByRunV2(ctx context.Context, in SettleRunInput) (SettleRun
 		leaseID, status                         string
 		reserved                                int64
 		leasePriceVersion, leaseSettingsVersion string
+		leaseCreatedAt                          time.Time
 	)
 	if err := tx.QueryRow(ctx, `
-		select id,status,reserved_credits,coalesce(price_version,''),coalesce(settings_version,'')
+		select id,status,reserved_credits,coalesce(price_version,''),coalesce(settings_version,''),created_at
 		from billing.usage_leases
 		where org_id=$1 and product=$2 and run_ref=$3 and status in ('active','expired')
 		for update`, in.OrgID, in.Product, in.RunRef).
-		Scan(&leaseID, &status, &reserved, &leasePriceVersion, &leaseSettingsVersion); err != nil {
+		Scan(&leaseID, &status, &reserved, &leasePriceVersion, &leaseSettingsVersion, &leaseCreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SettleRunResult{Settled: false}, nil
 		}
@@ -508,6 +509,13 @@ func (s *Store) SettleByRunV2(ctx context.Context, in SettleRunInput) (SettleRun
 		return SettleRunResult{}, err
 	}
 
+	// dslpha's release carries no started_at. Price the turn at reservation
+	// time (the closest known start) so a turn that began inside a peak window
+	// is not silently repriced at the moment the release arrives.
+	pricedAt := leaseCreatedAt
+	if pricedAt.IsZero() {
+		pricedAt = time.Now()
+	}
 	priceVersion := leasePriceVersion
 	var (
 		book       PriceBook
@@ -516,7 +524,7 @@ func (s *Store) SettleByRunV2(ctx context.Context, in SettleRunInput) (SettleRun
 	)
 	if len(usages) > 0 {
 		if priceVersion == "" {
-			priceVersion, bookErr = currentPriceVersion(ctx, tx, time.Now())
+			priceVersion, bookErr = currentPriceVersion(ctx, tx, pricedAt)
 		}
 		if bookErr == nil {
 			book, bookErr = loadPriceBook(ctx, tx, time.Time{}, priceVersion)
@@ -539,7 +547,6 @@ func (s *Store) SettleByRunV2(ctx context.Context, in SettleRunInput) (SettleRun
 	case in.Byok:
 		// BYOK records usage only; there is nothing to charge.
 	case len(usages) > 0 && bookLoaded:
-		pricedAt := time.Now()
 		var total int64
 		for _, usage := range usages {
 			charge, priceErr := book.PriceCharge(usage.Model, TokenUsage{

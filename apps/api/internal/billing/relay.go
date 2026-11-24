@@ -238,9 +238,9 @@ func (s *Store) RelaySettleWithDetails(ctx context.Context, reservationID, settl
 	var tag pgconn.CommandTag
 	if charged > 0 {
 		tag, err = tx.Exec(ctx, `
-			insert into billing.ledger (org_id,product,delta_credits,reason,ref_id,idempotency_key)
-			values ($1,'relay',$2,'relay_usage',$3,$4)
-			on conflict (idempotency_key) do nothing`, orgID, -charged, reservationID, idempotencyKey)
+			insert into billing.ledger (org_id,product,delta_credits,reason,ref_id,idempotency_key,amount_minor)
+			values ($1,'relay',$2,'relay_usage',$3,$4,$5)
+			on conflict (idempotency_key) do nothing`, orgID, -charged, reservationID, idempotencyKey, amount*MinorPerCredit)
 	}
 	if err != nil {
 		return RelayOperation{}, err

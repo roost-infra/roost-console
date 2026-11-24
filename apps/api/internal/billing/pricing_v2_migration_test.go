@@ -104,6 +104,7 @@ func TestPricingV2Migration(t *testing.T) {
 	for _, column := range []string{
 		"alter table billing.ledger add column if not exists policy_version text",
 		"alter table billing.ledger add column if not exists settings_version text",
+		"alter table billing.ledger add column if not exists amount_minor bigint",
 		"alter table billing.usage_events add column if not exists policy_version text",
 		"alter table billing.usage_events add column if not exists upstream_id text",
 		"alter table billing.usage_leases add column if not exists price_version text",

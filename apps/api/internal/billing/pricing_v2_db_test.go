@@ -91,6 +91,13 @@ func seedPricingV2Settings(t *testing.T, pool *pgxpool.Pool) {
 // golden Sonnet 5.5 prices and no peak window (tests are time independent).
 func seedPricingV2Book(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
+	seedPricingV2BookVersion(t, pool, testPriceBookVersion, nil)
+}
+
+// seedPricingV2BookVersion inserts the golden Sonnet 5.5 schedule for one
+// version, plus a peak window over the given ISO weekdays when provided.
+func seedPricingV2BookVersion(t *testing.T, pool *pgxpool.Pool, version string, peakWeekdays []int) {
+	t.Helper()
 	ctx := context.Background()
 	effective := time.Now().Add(-time.Hour).UTC()
 	rows := []struct {
@@ -110,12 +117,27 @@ func seedPricingV2Book(t *testing.T, pool *pgxpool.Pool) {
 				 cost_minor_per_million,cost_currency,effective_from)
 			values ($1,'claude-sonnet-5.5','CREDIT',$2,0,$3,$4,'CNY',$5)
 			on conflict (version,model,component,tier_max_input) do nothing`,
-			testPriceBookVersion, row.component, row.retail, row.cost, effective); err != nil {
+			version, row.component, row.retail, row.cost, effective); err != nil {
 			t.Fatalf("seed price book: %v", err)
 		}
 	}
+	if len(peakWeekdays) > 0 {
+		weekdays := make([]int16, len(peakWeekdays))
+		for i, day := range peakWeekdays {
+			weekdays[i] = int16(day)
+		}
+		if _, err := pool.Exec(ctx, `
+			insert into billing.price_book_peak
+				(version,model,weekdays,start_minute,end_minute,timezone,multiplier_bps)
+			values ($1,'claude-sonnet-5.5',$2,540,1080,'Asia/Shanghai',12000)
+			on conflict (version,model,weekdays,start_minute,end_minute) do nothing`,
+			version, weekdays); err != nil {
+			t.Fatalf("seed price book peak: %v", err)
+		}
+	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `delete from billing.price_book where version=$1`, testPriceBookVersion)
+		_, _ = pool.Exec(context.Background(), `delete from billing.price_book where version=$1`, version)
+		_, _ = pool.Exec(context.Background(), `delete from billing.price_book_peak where version=$1`, version)
 	})
 }
 
@@ -335,8 +357,8 @@ func TestRelaySettleV2DBVersionAndAmountMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	if !replay.Found || replay.Amount != 180 || replay.AmountMinor != 180_000 {
-		t.Fatalf("replay op=%+v", replay)
+	if !replay.Found || replay.Amount != 180 || replay.AmountMinor != 179_595 {
+		t.Fatalf("replay op=%+v want amount 180 minor 179595", replay)
 	}
 
 	releasedRequest := "req-" + uuid.NewString()
@@ -506,5 +528,103 @@ func TestSettleByRunV2DBByokExpiredPartial(t *testing.T) {
 	balance, _ = walletState(t, pool, expiredOrg)
 	if balance != 198 {
 		t.Fatalf("expired wallet balance=%d want 198", balance)
+	}
+}
+
+// TestRelaySettleV2DBReplayExactMinor proves an idempotent replay returns the
+// exact priced minor amount stored on the first settlement's ledger row.
+func TestRelaySettleV2DBReplayExactMinor(t *testing.T) {
+	pool := pricingV2TestPool(t)
+	seedPricingV2Settings(t, pool)
+	seedPricingV2Book(t, pool)
+	store := New(pool)
+	ctx := context.Background()
+
+	orgID := newSandboxTestOrg(t, pool, 1_000)
+	requestID := "req-" + uuid.NewString()
+	reservation, err := store.RelayReserveWithDetails(ctx, RelayReserveInput{
+		OrgID: orgID, RequestID: requestID, Amount: 200, Currency: RelayCurrency,
+		TTL: time.Minute, PriceVersion: testPriceBookVersion,
+	})
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	in := RelaySettleInput{
+		ReservationID:  reservation.ID,
+		SettlementID:   "stl-" + uuid.NewString(),
+		IdempotencyKey: "settle:" + requestID,
+		Model:          "claude-sonnet-5.5",
+		PriceVersion:   testPriceBookVersion,
+		Usage:          &TokenUsage{Input: 150_000, Output: 2_000},
+	}
+	first, err := store.RelaySettleV2(ctx, in)
+	if err != nil {
+		t.Fatalf("first settle: %v", err)
+	}
+	if first.AmountMinor != 179_595 || first.Amount != 180 {
+		t.Fatalf("first op=%+v", first)
+	}
+	var ledgerMinor *int64
+	if err := pool.QueryRow(ctx, `
+		select amount_minor from billing.ledger where idempotency_key=$1`, in.IdempotencyKey).Scan(&ledgerMinor); err != nil {
+		t.Fatalf("read ledger amount_minor: %v", err)
+	}
+	if ledgerMinor == nil || *ledgerMinor != 179_595 {
+		t.Fatalf("ledger amount_minor=%v want 179595", ledgerMinor)
+	}
+	replay, err := store.RelaySettleV2(ctx, in)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if replay.AmountMinor != 179_595 || replay.Amount != 180 {
+		t.Fatalf("replay op=%+v want amount 180 minor 179595", replay)
+	}
+}
+
+// TestSettleByRunV2DBPeakUsesLeaseCreatedAt locks the dslpha timing rule: with
+// no started_at in the release, tier/peak are priced at the lease's creation
+// time. The peak window covers only the lease's (past) weekday, so a settle
+// priced at now() would fall through to the cheaper off-peak rate.
+func TestSettleByRunV2DBPeakUsesLeaseCreatedAt(t *testing.T) {
+	pool := pricingV2TestPool(t)
+	seedPricingV2Settings(t, pool)
+
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	// The lease started yesterday at 10:00 local time; the window covers that
+	// weekday only, so "now" can never be inside it.
+	now := time.Now().In(shanghai)
+	leaseStart := time.Date(now.Year(), now.Month(), now.Day()-1, 10, 0, 0, 0, shanghai)
+	weekday := int(leaseStart.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	const peakBookVersion = "test-v2-peak-book"
+	seedPricingV2BookVersion(t, pool, peakBookVersion, []int{weekday})
+
+	orgID := newSandboxTestOrg(t, pool, 1_000)
+	runRef := "run-" + uuid.NewString()
+	leaseID := insertDSAlphaLease(t, pool, orgID, runRef, 200, "active")
+	if _, err := pool.Exec(context.Background(), `
+		update billing.usage_leases set price_version=$2, created_at=$3 where id=$1`,
+		leaseID, peakBookVersion, leaseStart); err != nil {
+		t.Fatalf("pin lease time: %v", err)
+	}
+	result, err := New(pool).SettleByRunV2(context.Background(), SettleRunInput{
+		OrgID: orgID, Product: "dsalpha", RunRef: runRef,
+		ModelUsage: []ModelUsage{{Model: "claude-sonnet-5.5", Input: 150_000, Output: 2_000}},
+	})
+	if err != nil {
+		t.Fatalf("settle by run: %v", err)
+	}
+	// Off-peak would be 179595 minor / 180 credits; the in-window start is
+	// 179595 × 1.2 = 215514 minor / 216 credits.
+	if result.AmountMinor != 215_514 || result.ChargedCredits != 216 {
+		t.Fatalf("result=%+v want peak 215514 minor / 216 credits", result)
+	}
+	if result.PriceVersion != peakBookVersion {
+		t.Fatalf("price version=%q", result.PriceVersion)
 	}
 }

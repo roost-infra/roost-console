@@ -79,6 +79,9 @@ create unique index if not exists debts_once on billing.debts(org_id, product, r
 
 alter table billing.ledger add column if not exists policy_version text;
 alter table billing.ledger add column if not exists settings_version text;
+-- Exact priced minor units of the charge, so an idempotent settlement replay
+-- can return the original amount instead of re-deriving it from whole credits.
+alter table billing.ledger add column if not exists amount_minor bigint;
 alter table billing.usage_events add column if not exists policy_version text;
 alter table billing.usage_events add column if not exists upstream_id text;
 alter table billing.usage_leases add column if not exists price_version text;
