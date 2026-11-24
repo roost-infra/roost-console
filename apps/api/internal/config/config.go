@@ -31,8 +31,19 @@ type Config struct {
 	XunhuQueryURL   string
 	XunhuNotifyURL  string
 	XunhuReturnURL  string
-	Environment     string
-	AdminEmails     []string
+	// EPUSDT is the optional self-hosted crypto gateway (second payment
+	// provider). EPUSDTAPIBase is the server-to-server address; payers only
+	// ever see the gateway's own public cashier URL.
+	EPUSDTAPIBase   string
+	EPUSDTPID       string
+	EPUSDTSecretKey string
+	EPUSDTNotifyURL string
+	EPUSDTReturnURL string
+	// EPUSDTAllowEmails restricts the crypto checkout to these accounts.
+	// Empty means every signed-in user may use it.
+	EPUSDTAllowEmails []string
+	Environment       string
+	AdminEmails       []string
 	// PaymentOrderTTL expires unpaid orders after this window so an abandoned
 	// checkout cannot sit in the order list forever.
 	PaymentOrderTTL   time.Duration
@@ -92,6 +103,12 @@ func Load() Config {
 		XunhuQueryURL:     get("XUNHUPAY_QUERY_URL", "https://api.xunhupay.com/payment/query.html"),
 		XunhuNotifyURL:    get("XUNHUPAY_NOTIFY_URL", ""),
 		XunhuReturnURL:    get("XUNHUPAY_RETURN_URL", ""),
+		EPUSDTAPIBase:     strings.TrimRight(get("EPUSDT_API_BASE", ""), "/"),
+		EPUSDTPID:         get("EPUSDT_PID", ""),
+		EPUSDTSecretKey:   get("EPUSDT_SECRET_KEY", ""),
+		EPUSDTNotifyURL:   get("EPUSDT_NOTIFY_URL", ""),
+		EPUSDTReturnURL:   get("EPUSDT_RETURN_URL", ""),
+		EPUSDTAllowEmails: splitCSV(get("EPUSDT_ALLOW_EMAILS", "")),
 		Environment:       get("APP_ENV", "development"),
 		PaymentOrderTTL:   getDuration("PAYMENT_ORDER_TTL", 2*time.Hour),
 		RatePaymentNotify: getInt("RATE_PAYMENT_NOTIFY_PER_MIN", 120),
@@ -159,6 +176,30 @@ func getInt64(k string, d int64) int64 {
 
 func (c Config) PaymentConfigured() bool {
 	return c.XunhuAppID != "" && c.XunhuAppSecret != ""
+}
+
+// EPUSDTConfigured reports whether the crypto gateway can take orders. The
+// notify URL is required: without it a paid order would never be reported.
+func (c Config) EPUSDTConfigured() bool {
+	return c.EPUSDTAPIBase != "" && c.EPUSDTPID != "" && c.EPUSDTSecretKey != "" && c.EPUSDTNotifyURL != ""
+}
+
+// EPUSDTAllowed reports whether this account may pay through the crypto
+// gateway. An empty allowlist opens it to everyone.
+func (c Config) EPUSDTAllowed(email string) bool {
+	if !c.EPUSDTConfigured() {
+		return false
+	}
+	if len(c.EPUSDTAllowEmails) == 0 {
+		return true
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	for _, allowed := range c.EPUSDTAllowEmails {
+		if email != "" && strings.ToLower(allowed) == email {
+			return true
+		}
+	}
+	return false
 }
 
 // splitCSV parses a comma separated environment value, trimming blanks.
