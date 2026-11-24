@@ -506,15 +506,20 @@ func (s *Store) ListReconcileOrders(ctx context.Context, minAge time.Duration, l
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+	// 'expired' rows are included only while they can still be settled: the
+	// gateway may confirm a transfer after its checkout window closed, and a
+	// lost callback would otherwise leave that payment unclaimed. XunhuPay
+	// orders are excluded because its checkout cannot be paid after expiry.
 	rows, err := s.Pool.Query(ctx, `
 		select id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,coalesce(provider_order_id,''),coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
 		from billing.orders
-		where status='pending'
+		where (status='pending'
+		       or (status='expired' and provider='epusdt' and provider_order_id is not null))
 		  and created_at < now() - make_interval(secs => $1)
 		  and created_at > now() - interval '24 hours'
 		  and (raw->>'reconcile_at' is null
 		       or (raw->>'reconcile_at')::timestamptz < now() - interval '10 minutes')
-		order by created_at
+		order by (status <> 'pending'), created_at
 		limit $2`, minAge.Seconds(), limit)
 	if err != nil {
 		return nil, err

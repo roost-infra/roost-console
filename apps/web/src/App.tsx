@@ -1469,12 +1469,52 @@ const PAYMENT_METHOD_LABELS: Record<PaymentMethod, { name: string; note: string 
 };
 
 function PaymentMethodModal({ methods, onPick, onClose }: { methods: PaymentMethod[]; onPick: (method: PaymentMethod) => void; onClose: () => void }) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // Recreated on every render by the caller, so keep it in a ref: an effect
+  // that depended on it would re-run (and steal focus back) each render.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  // Keyboard users must land inside the dialog, must not tab out of it, and
+  // must get their focus back where they came from.
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusables = () => Array.from(
+      panelRef.current?.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') ?? [],
+    );
+    focusables()[0]?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previous?.focus();
+    };
+  }, []);
+
   return (
     <div className="modal" role="dialog" aria-modal="true" aria-label="选择支付方式">
-      <div className="modal__panel">
+      <div className="modal__panel" ref={panelRef}>
         <button className="modal__close" onClick={onClose} aria-label="关闭">×</button>
         <p className="kicker">PAYMENT</p>
-        <h2>选择支付方式</h2>
+        <h2>选择支付方式ZZZ</h2>
         <div className="pay-methods">
           {methods.map((method) => (
             <button className="pay-method" key={method} type="button" onClick={() => onPick(method)}>
@@ -2728,3 +2768,4 @@ export default function App() {
 
   return view;
 }
+

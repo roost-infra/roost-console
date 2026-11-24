@@ -984,6 +984,13 @@ func (s *Server) devPay(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) xunhuNotify(w http.ResponseWriter, r *http.Request) {
+	// Without merchant credentials there is no secret to verify against, and
+	// the endpoint would otherwise be an unauthenticated way to fulfil orders
+	// created through another provider.
+	if !s.cfg.PaymentConfigured() || s.paidOrders == nil {
+		http.NotFound(w, r)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
@@ -999,9 +1006,16 @@ func (s *Server) xunhuNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tradeNo := r.PostForm.Get("trade_order_id")
-	o, err := s.store.OrderByTradeNo(r.Context(), tradeNo)
+	o, err := s.paidOrders.OrderByTradeNo(r.Context(), tradeNo)
 	if err != nil {
 		s.log.Warn("xunhupay notify unknown order", "trade_no", tradeNo)
+		http.Error(w, "unknown order", http.StatusNotFound)
+		return
+	}
+	if o.Provider != payment.ProviderXunhuPay {
+		// A signed XunhuPay notification for an order that checks out through
+		// another gateway proves nothing about that order.
+		s.log.Warn("xunhupay notify for another provider's order", "order", o.ID, "provider", o.Provider)
 		http.Error(w, "unknown order", http.StatusNotFound)
 		return
 	}
@@ -1011,7 +1025,7 @@ func (s *Server) xunhuNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw, _ := json.Marshal(r.PostForm)
-	if err := s.store.Fulfill(r.Context(), o.ID, r.PostForm.Get("transaction_id"), amount, raw); err != nil {
+	if err := s.paidOrders.Fulfill(r.Context(), o.ID, r.PostForm.Get("transaction_id"), amount, raw); err != nil {
 		s.log.Error("xunhupay fulfill failed", "order", o.ID, "err", err)
 		http.Error(w, "fulfill failed", http.StatusInternalServerError)
 		return

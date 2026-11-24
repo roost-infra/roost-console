@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ProviderXunhuPay and ProviderEPUSDT are the billing.orders.provider values.
@@ -51,7 +53,42 @@ type EPUSDT struct {
 }
 
 func (c *EPUSDT) Configured() bool {
-	return c != nil && c.APIBase != "" && c.PID != "" && c.SecretKey != ""
+	return c != nil && c.PID != "" && c.SecretKey != "" && ValidGatewayBase(c.APIBase)
+}
+
+// epusdtHTTP is the client used unless a caller injects one. Redirects are
+// refused: a 3xx could downgrade an https gateway call to plain HTTP, and the
+// status answer is unauthenticated, so its transport is the only protection.
+var epusdtHTTP = &http.Client{
+	Timeout: 20 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// ValidGatewayBase accepts an HTTPS endpoint anywhere and plain HTTP only on
+// this machine. The reconciliation path trusts the gateway's "paid" answer, so
+// a cleartext hop to another host would let anyone on the path forge it.
+func ValidGatewayBase(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		return isLoopbackHost(u.Hostname())
+	}
+	return false
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // EPUSDTSign reproduces the gateway's canonical signature: every non-empty
@@ -198,7 +235,7 @@ func (c *EPUSDT) call(ctx context.Context, method, path string, body []byte, out
 	}
 	client := c.HTTP
 	if client == nil {
-		client = http.DefaultClient
+		client = epusdtHTTP
 	}
 	resp, err := client.Do(req)
 	if err != nil {

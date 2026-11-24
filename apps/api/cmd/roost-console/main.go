@@ -119,16 +119,17 @@ func reconcileOrders(ctx context.Context, store reconcileStore, gateways orderGa
 	}
 	for _, order := range orders {
 		query := gateways.queryFor(order)
+		// Back off first, not after the query: a slow provider can outlive the
+		// batch deadline, and a failed touch would leave that order at the head
+		// of every later batch, starving the orders behind it. It also keeps a
+		// broken secret or an outage from becoming a per-minute query storm.
+		if touchErr := store.TouchOrderReconcile(ctx, order.ID); touchErr != nil {
+			log.Warn("order reconcile touch failed", "order", order.ID, "err", touchErr)
+		}
 		var state orderState
 		var err error
 		if query != nil {
 			state, err = query(ctx)
-		}
-		// Back off this order for 10 minutes even on error: a broken secret or
-		// provider outage must not turn into a per-minute query storm. An order
-		// nobody can be asked about backs off too, so it cannot fill the batch.
-		if touchErr := store.TouchOrderReconcile(ctx, order.ID); touchErr != nil {
-			log.Warn("order reconcile touch failed", "order", order.ID, "err", touchErr)
 		}
 		if query == nil {
 			// Its provider is not configured here. Never ask a different one.
@@ -146,6 +147,11 @@ func reconcileOrders(ctx context.Context, store reconcileStore, gateways orderGa
 			}
 			log.Info("order reconciled as paid", "order", order.ID, "provider", order.Provider, "out_trade_no", order.OutTradeNo)
 		case state.closed:
+			if order.Status == "expired" {
+				// Already closed locally; the row only stays in the batch so a
+				// late settlement can still be caught.
+				continue
+			}
 			if err := store.CloseOrder(ctx, order.ID, "expired"); err != nil {
 				log.Warn("order reconcile close failed", "order", order.ID, "err", err)
 				continue
@@ -246,7 +252,12 @@ func main() {
 	}
 	epusdt := &payment.EPUSDT{
 		APIBase: cfg.EPUSDTAPIBase, PID: cfg.EPUSDTPID, SecretKey: cfg.EPUSDTSecretKey,
-		NotifyURL: cfg.EPUSDTNotifyURL, ReturnURL: cfg.EPUSDTReturnURL, HTTP: &http.Client{Timeout: 20 * time.Second},
+		NotifyURL: cfg.EPUSDTNotifyURL, ReturnURL: cfg.EPUSDTReturnURL,
+	}
+	if cfg.EPUSDTAPIBase != "" && !payment.ValidGatewayBase(cfg.EPUSDTAPIBase) {
+		// Refuse to trust an unauthenticated status answer over cleartext to
+		// another host; see payment.ValidGatewayBase.
+		log.Error("epusdt disabled: EPUSDT_API_BASE must be https, or http on this machine", "base", cfg.EPUSDTAPIBase)
 	}
 	srv := httpapi.New(cfg, store, verifier, pay, epusdt, log)
 	startPaymentJobs(context.Background(), cfg, store, pay, epusdt, log)
