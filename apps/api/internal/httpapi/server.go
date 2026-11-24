@@ -751,6 +751,13 @@ func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"plans": plans, "payment_methods": s.paymentMethods(userFrom(r))})
 }
 
+// epusdtUsable reports whether the crypto gateway can actually take orders. The
+// client's own check also rejects a gateway address that is neither https nor
+// this machine, so an invalid deployment can never be offered or ordered from.
+func (s *Server) epusdtUsable() bool {
+	return s.epusdt != nil && s.epusdt.Configured()
+}
+
 // paymentMethods lists the checkout providers this account may choose, default
 // first. The web client only offers a choice when there is more than one.
 func (s *Server) paymentMethods(u *auth.User) []string {
@@ -758,7 +765,7 @@ func (s *Server) paymentMethods(u *auth.User) []string {
 	if s.cfg.PaymentConfigured() || s.cfg.Environment == "development" {
 		methods = append(methods, payment.ProviderXunhuPay)
 	}
-	if u != nil && s.epusdt != nil && s.cfg.EPUSDTAllowed(u.Email) {
+	if u != nil && s.epusdtUsable() && s.cfg.EPUSDTAllowed(u.Email) {
 		methods = append(methods, payment.ProviderEPUSDT)
 	}
 	return methods
@@ -900,7 +907,7 @@ func (s *Server) checkoutProvider(requested, email string) (string, bool) {
 	case "", payment.ProviderXunhuPay:
 		return payment.ProviderXunhuPay, true
 	case payment.ProviderEPUSDT:
-		if s.epusdt != nil && s.cfg.EPUSDTAllowed(email) {
+		if s.epusdtUsable() && s.cfg.EPUSDTAllowed(email) {
 			return payment.ProviderEPUSDT, true
 		}
 	}

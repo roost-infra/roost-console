@@ -213,6 +213,11 @@ func TestCheckoutProviderEnforcesTheAllowlist(t *testing.T) {
 		{"account off the allowlist", limited, "epusdt", "other@example.com", "", false},
 		{"allowlist with no email", limited, "epusdt", "", "", false},
 		{"gateway not configured", off, "epusdt", "owner@example.com", "", false},
+		{"gateway address rejected", epusdtServer(func() config.Config {
+			bad := epusdtConfig()
+			bad.EPUSDTAPIBase = "http://pay.example.com"
+			return bad
+		}(), nil), "epusdt", "owner@example.com", "", false},
 		{"unknown provider", open, "paypal", "a@example.com", "", false},
 	}
 	for _, tc := range cases {
