@@ -17,15 +17,18 @@ import (
 )
 
 type fakeRelayBilling struct {
-	settleCalls  []fakeSettleCall
-	settleOp     billing.RelayOperation
-	settleErr    error
-	operation    billing.RelayOperation
-	operationErr error
-	charges      []billing.ToolCharge
-	chargesErr   error
-	identity     billing.RelayIdentity
-	apiKeyErr    error
+	settleCalls   []fakeSettleCall
+	settleV2Calls []billing.RelaySettleInput
+	reserveCalls  []billing.RelayReserveInput
+	reserveErr    error
+	settleOp      billing.RelayOperation
+	settleErr     error
+	operation     billing.RelayOperation
+	operationErr  error
+	charges       []billing.ToolCharge
+	chargesErr    error
+	identity      billing.RelayIdentity
+	apiKeyErr     error
 }
 
 type fakeSettleCall struct {
@@ -56,6 +59,14 @@ func (f *fakeRelayBilling) RelayReserve(context.Context, string, string, int64, 
 	return billing.RelayReservation{ID: "res-1"}, nil
 }
 
+func (f *fakeRelayBilling) RelayReserveWithDetails(_ context.Context, in billing.RelayReserveInput) (billing.RelayReservation, error) {
+	f.reserveCalls = append(f.reserveCalls, in)
+	if f.reserveErr != nil {
+		return billing.RelayReservation{}, f.reserveErr
+	}
+	return billing.RelayReservation{ID: "res-1", Amount: in.Amount, PriceVersion: in.PriceVersion, SettingsVersion: "2026-11-25.1"}, nil
+}
+
 func (f *fakeRelayBilling) RelaySettleWithDetails(_ context.Context, reservationID, settlementID, idempotencyKey string, amount int64, charges []billing.ToolCharge, compression *billing.Compression, usage *billing.UsageEvent) (billing.RelayOperation, error) {
 	f.settleCalls = append(f.settleCalls, fakeSettleCall{
 		reservationID:  reservationID,
@@ -69,6 +80,13 @@ func (f *fakeRelayBilling) RelaySettleWithDetails(_ context.Context, reservation
 	f.settleOp.ToolCharges = charges
 	f.settleOp.Compression = compression
 	f.settleOp.Usage = usage
+	return f.settleOp, f.settleErr
+}
+
+func (f *fakeRelayBilling) RelaySettleV2(_ context.Context, in billing.RelaySettleInput) (billing.RelayOperation, error) {
+	f.settleV2Calls = append(f.settleV2Calls, in)
+	f.settleOp.ToolCharges = in.ToolCharges
+	f.settleOp.Usage = in.Stats
 	return f.settleOp, f.settleErr
 }
 

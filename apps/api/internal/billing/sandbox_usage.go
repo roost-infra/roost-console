@@ -72,31 +72,34 @@ type SandboxUsageInput struct {
 
 // SandboxUsage is a normalized, validated row ready to persist.
 type SandboxUsage struct {
-	ID                int64           `json:"id"`
-	OrgID             string          `json:"org_id"`
-	UserID            string          `json:"user_id,omitempty"`
-	Product           string          `json:"product"`
-	SandboxID         string          `json:"sandbox_id"`
-	Provider          string          `json:"provider,omitempty"`
-	ProviderSandboxID string          `json:"provider_sandbox_id,omitempty"`
-	RunID             string          `json:"run_id,omitempty"`
-	StartedAt         *time.Time      `json:"started_at"`
-	EndedAt           *time.Time      `json:"ended_at"`
-	BillableSeconds   int64           `json:"billable_seconds"`
-	CPUSeconds        int64           `json:"cpu_seconds"`
-	MemoryMiBSeconds  int64           `json:"memory_mib_seconds"`
-	DiskMiBSeconds    int64           `json:"disk_mib_seconds"`
-	GPUSeconds        int64           `json:"gpu_seconds"`
-	CPUCredits        float64         `json:"cpu_credits"`
-	MemoryCredits     float64         `json:"memory_credits"`
-	DiskCredits       float64         `json:"disk_credits"`
-	GPUCredits        float64         `json:"gpu_credits"`
-	TotalCredits      int64           `json:"total_credits"`
-	CreditsMinor      int64           `json:"credits_minor"`
-	Currency          string          `json:"currency"`
-	UnitPrices        json.RawMessage `json:"unit_prices,omitempty"`
-	IdempotencyKey    string          `json:"idempotency_key"`
-	CreatedAt         time.Time       `json:"created_at"`
+	ID                int64      `json:"id"`
+	OrgID             string     `json:"org_id"`
+	UserID            string     `json:"user_id,omitempty"`
+	Product           string     `json:"product"`
+	SandboxID         string     `json:"sandbox_id"`
+	Provider          string     `json:"provider,omitempty"`
+	ProviderSandboxID string     `json:"provider_sandbox_id,omitempty"`
+	RunID             string     `json:"run_id,omitempty"`
+	StartedAt         *time.Time `json:"started_at"`
+	EndedAt           *time.Time `json:"ended_at"`
+	BillableSeconds   int64      `json:"billable_seconds"`
+	CPUSeconds        int64      `json:"cpu_seconds"`
+	MemoryMiBSeconds  int64      `json:"memory_mib_seconds"`
+	DiskMiBSeconds    int64      `json:"disk_mib_seconds"`
+	GPUSeconds        int64      `json:"gpu_seconds"`
+	CPUCredits        float64    `json:"cpu_credits"`
+	MemoryCredits     float64    `json:"memory_credits"`
+	DiskCredits       float64    `json:"disk_credits"`
+	GPUCredits        float64    `json:"gpu_credits"`
+	TotalCredits      int64      `json:"total_credits"`
+	CreditsMinor      int64      `json:"credits_minor"`
+	// GPUUnpriced marks a run that used GPU time while V2 has no configured
+	// GPU unit price: the seconds are recorded, the component is not billed.
+	GPUUnpriced    bool            `json:"gpu_unpriced,omitempty"`
+	Currency       string          `json:"currency"`
+	UnitPrices     json.RawMessage `json:"unit_prices,omitempty"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	CreatedAt      time.Time       `json:"created_at"`
 }
 
 // SandboxChargeResult is the service response body. Replayed is true when the
@@ -258,19 +261,67 @@ func NormalizeSandboxUsage(in SandboxUsageInput) (SandboxUsage, error) {
 		}
 		u.TotalCredits = *in.TotalCredits
 	} else {
+		// A V2 product reports raw usage only; the console prices it from
+		// settings after normalization. Client component credits are kept for
+		// the audit snapshot but never drive the charge.
 		components := u.CPUCredits + u.MemoryCredits + u.DiskCredits + u.GPUCredits
-		if components <= 0 {
-			return SandboxUsage{}, invalidSandbox("total_credits or a positive component credit is required")
+		if components > 0 {
+			u.TotalCredits = int64(math.Ceil(components))
 		}
-		u.TotalCredits = int64(math.Ceil(components))
-	}
-	if u.TotalCredits <= 0 {
-		return SandboxUsage{}, invalidSandbox("total_credits must be > 0")
 	}
 	if u.TotalCredits > math.MaxInt64/SandboxCreditsMinorPerCredit {
 		return SandboxUsage{}, invalidSandbox("total_credits is out of range")
 	}
 	u.CreditsMinor = u.TotalCredits * SandboxCreditsMinorPerCredit
+	return u, nil
+}
+
+// Daytona sandbox unit prices (USD) from the billing V2 plan. They are the
+// authoritative cost basis: products no longer supply unit prices.
+const (
+	sandboxCPUUSDPerCoreHour  = 0.0504
+	sandboxMemoryUSDPerGBHour = 0.0162
+	sandboxDiskUSDPerGBHour   = 0.000108
+)
+
+func roundSandboxCredits(value float64) float64 {
+	return math.Round(value*10000) / 10000
+}
+
+// PriceSandboxUsage replaces the product-reported credit figures with the
+// console's own calculation: usage seconds × Daytona USD unit price ×
+// settings.sandbox.markup_bps × settings.fx.usd_to_credits, ceil'd to whole
+// credits. The reported values stay available in UnitPrices for the audit
+// difference report; GPU time is recorded unpriced instead of being billed at
+// an invented rate.
+func PriceSandboxUsage(u SandboxUsage, settings Settings) (SandboxUsage, error) {
+	hours := float64(u.BillableSeconds) / 3600
+	if hours <= 0 {
+		hours = math.Max(
+			math.Max(float64(u.CPUSeconds), float64(u.MemoryMiBSeconds)/1024),
+			float64(u.DiskMiBSeconds)/1024,
+		) / 3600
+	}
+	cpuUSD := float64(u.CPUSeconds) / 3600 * sandboxCPUUSDPerCoreHour
+	memoryUSD := float64(u.MemoryMiBSeconds) / 1024 / 3600 * sandboxMemoryUSDPerGBHour
+	diskGBHours := float64(u.DiskMiBSeconds) / 1024 / 3600
+	freeGBHours := float64(settings.SandboxDiskFreeGiB) * hours
+	diskUSD := math.Max(0, diskGBHours-freeGBHours) * sandboxDiskUSDPerGBHour
+	totalUSD := cpuUSD + memoryUSD + diskUSD
+	markup := float64(settings.SandboxMarkupBPS) / 10000
+	fx := float64(settings.FXUSDToCredits)
+
+	u.GPUUnpriced = u.GPUSeconds > 0
+	u.CPUCredits = roundSandboxCredits(cpuUSD * markup * fx)
+	u.MemoryCredits = roundSandboxCredits(memoryUSD * markup * fx)
+	u.DiskCredits = roundSandboxCredits(diskUSD * markup * fx)
+	u.GPUCredits = 0
+	credits := int64(math.Ceil(totalUSD * markup * fx))
+	if credits <= 0 {
+		return u, invalidSandbox("no billable sandbox usage")
+	}
+	u.TotalCredits = credits
+	u.CreditsMinor = credits * SandboxCreditsMinorPerCredit
 	return u, nil
 }
 
@@ -304,6 +355,12 @@ func querySandboxUsageByKey(ctx context.Context, q sandboxUsageQuerier, key stri
 	}
 	if rawUnitPrices != "" {
 		u.UnitPrices = json.RawMessage(rawUnitPrices)
+		var snapshot struct {
+			GPUUnpriced bool `json:"gpu_unpriced"`
+		}
+		if err := json.Unmarshal(u.UnitPrices, &snapshot); err == nil {
+			u.GPUUnpriced = snapshot.GPUUnpriced
+		}
 	}
 	return u, true, nil
 }
@@ -331,6 +388,47 @@ func (s *Store) RecordSandboxUsage(ctx context.Context, in SandboxUsageInput) (S
 	u, err := NormalizeSandboxUsage(in)
 	if err != nil {
 		return SandboxChargeResult{}, err
+	}
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return SandboxChargeResult{}, err
+	}
+	reported := map[string]any{
+		"reported_total_credits":  in.TotalCredits,
+		"reported_cpu_credits":    in.CPUCredits,
+		"reported_memory_credits": in.MemoryCredits,
+		"reported_disk_credits":   in.DiskCredits,
+		"reported_gpu_credits":    in.GPUCredits,
+		"reported_unit_prices":    json.RawMessage(in.UnitPrices),
+	}
+	u, err = PriceSandboxUsage(u, settings)
+	if err != nil {
+		return SandboxChargeResult{}, err
+	}
+	// Keep the product's report next to the authoritative rate snapshot for
+	// the transition difference report; unit_prices stays display-only.
+	snapshot := map[string]any{}
+	if len(u.UnitPrices) > 0 {
+		_ = json.Unmarshal(u.UnitPrices, &snapshot)
+	}
+	snapshot["sandbox_markup_bps"] = settings.SandboxMarkupBPS
+	snapshot["fx_usd_to_credits"] = settings.FXUSDToCredits
+	snapshot["gpu_unpriced"] = u.GPUUnpriced
+	snapshot["authoritative_cpu_credits"] = u.CPUCredits
+	snapshot["authoritative_memory_credits"] = u.MemoryCredits
+	snapshot["authoritative_disk_credits"] = u.DiskCredits
+	snapshot["authoritative_total_credits"] = u.TotalCredits
+	for key, value := range reported {
+		if raw, ok := value.(json.RawMessage); ok {
+			if len(raw) > 0 && string(raw) != "null" {
+				snapshot[key] = raw
+			}
+			continue
+		}
+		snapshot[key] = value
+	}
+	if merged, mErr := json.Marshal(snapshot); mErr == nil {
+		u.UnitPrices = merged
 	}
 
 	tx, err := s.Pool.Begin(ctx)

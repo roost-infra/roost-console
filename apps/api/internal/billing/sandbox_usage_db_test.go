@@ -90,8 +90,11 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	if result.Usage.ID == 0 || result.ChargedCredits != 4 || result.Usage.CreditsMinor != 4000 ||
-		result.BalanceCredits != 996 || result.Replayed {
+	// The console prices the report from settings (Daytona rates × markup × fx):
+	// 0.0666 USD × 1.3 × 720 = 62.3376 credits -> ceil 63. The product-reported
+	// 4 credits are kept only as an audit snapshot.
+	if result.Usage.ID == 0 || result.ChargedCredits != 63 || result.Usage.CreditsMinor != 63000 ||
+		result.BalanceCredits != 937 || result.Replayed {
 		t.Fatalf("record result=%+v", result)
 	}
 
@@ -107,8 +110,8 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 		Scan(&gotTotal, &gotMinor, &gotBillable, &gotProduct, &gotKey, &gotRef, &gotCPU); err != nil {
 		t.Fatalf("read sandbox row: %v", err)
 	}
-	if gotTotal != 4 || gotMinor != 4000 || gotBillable != 3600 ||
-		gotProduct != "market" || gotKey != idempotencyKey || gotRef != "run-1" || gotCPU != 1.5 {
+	if gotTotal != 63 || gotMinor != 63000 || gotBillable != 3600 ||
+		gotProduct != "market" || gotKey != idempotencyKey || gotRef != "run-1" || gotCPU != 47.1744 {
 		t.Fatalf("persisted row total=%d minor=%d billable=%d product=%q key=%q ref=%q cpu=%v",
 			gotTotal, gotMinor, gotBillable, gotProduct, gotKey, gotRef, gotCPU)
 	}
@@ -121,7 +124,7 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 		Scan(&ledgerDelta, &ledgerReason, &ledgerRef, &ledgerKey); err != nil {
 		t.Fatalf("read ledger: %v", err)
 	}
-	if ledgerDelta != -4 || ledgerReason != "sandbox_usage" || ledgerRef != "run-1" ||
+	if ledgerDelta != -63 || ledgerReason != "sandbox_usage" || ledgerRef != "run-1" ||
 		ledgerKey != "sandbox:"+idempotencyKey {
 		t.Fatalf("ledger delta=%d reason=%q ref=%q key=%q", ledgerDelta, ledgerReason, ledgerRef, ledgerKey)
 	}
@@ -136,7 +139,7 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 		t.Fatalf("replay: %v", err)
 	}
 	if !again.Replayed || again.Usage.ID != result.Usage.ID ||
-		again.ChargedCredits != 4 || again.BalanceCredits != 996 {
+		again.ChargedCredits != 63 || again.BalanceCredits != 937 {
 		t.Fatalf("replay result=%+v", again)
 	}
 	var rows, ledgerRows int64
@@ -150,7 +153,7 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 	if err := pool.QueryRow(ctx, `select balance_credits from billing.wallets where org_id=$1`, orgID).Scan(&balance); err != nil {
 		t.Fatalf("read wallet: %v", err)
 	}
-	if rows != 1 || ledgerRows != 1 || balance != 996 {
+	if rows != 1 || ledgerRows != 1 || balance != 937 {
 		t.Fatalf("after replay rows=%d ledger=%d balance=%d", rows, ledgerRows, balance)
 	}
 
@@ -170,12 +173,14 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 		t.Fatalf("cross-org replay debited: balance=%d", otherBalance)
 	}
 
-	// Insufficient credits: 402 at the store boundary, and the insert rolls back.
+	// Insufficient credits: 402 at the store boundary, and the insert rolls
+	// back. The charge is the console-priced 63 credits, so a 1-credit wallet
+	// cannot cover it.
+	poorOrgID := newSandboxTestOrg(t, pool, 1)
 	refusedKey := "sbx-refused-" + uuid.NewString()
 	refused := in
+	refused.OrgID = poorOrgID
 	refused.IdempotencyKey = refusedKey
-	huge := int64(100000)
-	refused.TotalCredits = &huge
 	if _, err := store.RecordSandboxUsage(ctx, refused); !errors.Is(err, ErrInsufficientCredits) {
 		t.Fatalf("refused err=%v want ErrInsufficientCredits", err)
 	}
@@ -204,8 +209,8 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("billing details: %v", err)
 	}
-	if details.Summary.TokenCredits != 3 || details.Summary.SandboxCredits != 4 ||
-		details.Summary.TotalCredits != 7 || details.Summary.TotalMinor != 7000 ||
+	if details.Summary.TokenCredits != 3 || details.Summary.SandboxCredits != 63 ||
+		details.Summary.TotalCredits != 66 || details.Summary.TotalMinor != 66000 ||
 		details.Summary.SandboxCount != 1 || details.Summary.Requests != 1 ||
 		details.Summary.TotalTokens != 1250 {
 		t.Fatalf("summary=%+v", details.Summary)
@@ -216,7 +221,7 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 		t.Fatalf("tokens=%+v", details.Tokens)
 	}
 	if len(details.Sandboxes) != 1 || details.Sandboxes[0].SandboxID != "sbx-1" ||
-		details.Sandboxes[0].CreditsMinor != 4000 || details.Sandboxes[0].Yuan != 0.04 ||
+		details.Sandboxes[0].CreditsMinor != 63000 || details.Sandboxes[0].Yuan != 0.63 ||
 		details.Sandboxes[0].BillableHours != 1 {
 		t.Fatalf("sandboxes=%+v", details.Sandboxes)
 	}
@@ -236,7 +241,7 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 			topSandbox = row.SandboxCredits
 		}
 	}
-	if topSandbox != 4 {
+	if topSandbox != 63 {
 		t.Fatalf("admin top org sandbox credits=%d", topSandbox)
 	}
 	var userSandbox int64
@@ -245,7 +250,7 @@ func TestSandboxUsagePersistenceDB(t *testing.T) {
 			userSandbox = row.SandboxCredits
 		}
 	}
-	if userSandbox != 4 {
+	if userSandbox != 63 {
 		t.Fatalf("admin user sandbox credits=%d", userSandbox)
 	}
 }

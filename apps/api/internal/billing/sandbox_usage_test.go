@@ -113,13 +113,10 @@ func TestNormalizeSandboxUsageRejectsInvalid(t *testing.T) {
 		"zero total":             func(in *SandboxUsageInput) { in.TotalCredits = &zero },
 		"negative total":         func(in *SandboxUsageInput) { in.TotalCredits = &negativeTotal },
 		"total overflow":         func(in *SandboxUsageInput) { in.TotalCredits = &tooBig },
-		"no total or components": func(in *SandboxUsageInput) {
-			in.CPUCredits, in.MemoryCredits, in.DiskCredits, in.GPUCredits = 0, 0, 0, 0
-		},
-		"ended before started": func(in *SandboxUsageInput) { in.StartedAt, in.EndedAt = &started, &before },
-		"unit prices array":    func(in *SandboxUsageInput) { in.UnitPrices = json.RawMessage(`[1,2]`) },
-		"unit prices invalid":  func(in *SandboxUsageInput) { in.UnitPrices = json.RawMessage(`{`) },
-		"long currency":        func(in *SandboxUsageInput) { in.Currency = strings.Repeat("C", sandboxMaxCurrencyLen+1) },
+		"ended before started":   func(in *SandboxUsageInput) { in.StartedAt, in.EndedAt = &started, &before },
+		"unit prices array":      func(in *SandboxUsageInput) { in.UnitPrices = json.RawMessage(`[1,2]`) },
+		"unit prices invalid":    func(in *SandboxUsageInput) { in.UnitPrices = json.RawMessage(`{`) },
+		"long currency":          func(in *SandboxUsageInput) { in.Currency = strings.Repeat("C", sandboxMaxCurrencyLen+1) },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -141,5 +138,117 @@ func TestNormalizeSandboxUsageDefaultsCurrency(t *testing.T) {
 	}
 	if u.Currency != "CNY" {
 		t.Fatalf("currency=%q", u.Currency)
+	}
+}
+
+// TestNormalizeSandboxUsageAllowsUsageOnlyReport proves a V2 product may send
+// raw usage with no client-side credits: pricing happens after normalization.
+func TestNormalizeSandboxUsageAllowsUsageOnlyReport(t *testing.T) {
+	in := validSandboxInput()
+	in.CPUCredits, in.MemoryCredits, in.DiskCredits, in.GPUCredits = 0, 0, 0, 0
+	u, err := NormalizeSandboxUsage(in)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if u.TotalCredits != 0 || u.CreditsMinor != 0 {
+		t.Fatalf("total=%d minor=%d want 0 before pricing", u.TotalCredits, u.CreditsMinor)
+	}
+}
+
+// TestPriceSandboxUsageFromSettings locks the server-side calculation: usage
+// seconds × Daytona USD rates × settings markup × fx, ceil to credits. The
+// product-reported credits must not influence the charge.
+func TestPriceSandboxUsageFromSettings(t *testing.T) {
+	in := validSandboxInput()
+	in.BillableSeconds = 3600
+	in.CPUSeconds = 3600
+	in.MemoryMiBSeconds = 3600 * 1024
+	in.DiskMiBSeconds = 0
+	in.GPUSeconds = 0
+	in.CPUCredits, in.MemoryCredits, in.DiskCredits, in.GPUCredits = 999, 999, 999, 999
+	u, err := NormalizeSandboxUsage(in)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	priced, err := PriceSandboxUsage(u, DefaultSettings())
+	if err != nil {
+		t.Fatalf("price: %v", err)
+	}
+	// cpu: 1 core-hour × $0.0504, memory: 1 GiB-hour × $0.0162.
+	// 0.0666 USD × 1.3 × 720 = 62.3376 -> 63 credits.
+	if priced.TotalCredits != 63 || priced.CreditsMinor != 63000 {
+		t.Fatalf("total=%d minor=%d want 63/63000", priced.TotalCredits, priced.CreditsMinor)
+	}
+	if priced.CPUCredits != 47.1744 || priced.MemoryCredits != 15.1632 {
+		t.Fatalf("cpu=%v memory=%v", priced.CPUCredits, priced.MemoryCredits)
+	}
+	if priced.DiskCredits != 0 {
+		t.Fatalf("disk credits=%v want 0 (within the 5 GiB free tier)", priced.DiskCredits)
+	}
+	if priced.GPUUnpriced {
+		t.Fatal("gpu marked unpriced without gpu seconds")
+	}
+}
+
+func TestPriceSandboxUsageMarksUnpricedGPU(t *testing.T) {
+	in := validSandboxInput()
+	in.BillableSeconds = 3600
+	in.CPUSeconds = 3600
+	in.MemoryMiBSeconds = 3600 * 1024
+	in.DiskMiBSeconds = 0
+	in.GPUSeconds = 1800
+	u, err := NormalizeSandboxUsage(in)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	priced, err := PriceSandboxUsage(u, DefaultSettings())
+	if err != nil {
+		t.Fatalf("price: %v", err)
+	}
+	if !priced.GPUUnpriced {
+		t.Fatal("gpu seconds recorded but gpu_unpriced is false")
+	}
+	if priced.TotalCredits != 63 || priced.GPUCredits != 0 {
+		t.Fatalf("total=%d gpu=%v want 63/0", priced.TotalCredits, priced.GPUCredits)
+	}
+}
+
+func TestPriceSandboxUsageExceedsClientTotal(t *testing.T) {
+	// A tiny report that the client priced at 0 still bills the one-credit
+	// minimum once the console computes a positive USD cost.
+	in := validSandboxInput()
+	in.BillableSeconds = 1
+	in.CPUSeconds = 1
+	in.MemoryMiBSeconds = 0
+	in.DiskMiBSeconds = 0
+	in.GPUSeconds = 0
+	in.CPUCredits, in.MemoryCredits, in.DiskCredits, in.GPUCredits = 0, 0, 0, 0
+	u, err := NormalizeSandboxUsage(in)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	priced, err := PriceSandboxUsage(u, DefaultSettings())
+	if err != nil {
+		t.Fatalf("price: %v", err)
+	}
+	if priced.TotalCredits != 1 {
+		t.Fatalf("total=%d want 1 (ceil of a sub-credit charge)", priced.TotalCredits)
+	}
+}
+
+func TestPriceSandboxUsageRejectsEmptyReport(t *testing.T) {
+	in := validSandboxInput()
+	in.BillableSeconds = 0
+	in.CPUSeconds = 0
+	in.MemoryMiBSeconds = 0
+	in.DiskMiBSeconds = 0
+	in.GPUSeconds = 0
+	in.CPUCredits, in.MemoryCredits, in.DiskCredits, in.GPUCredits = 0, 0, 0, 0
+	u, err := NormalizeSandboxUsage(in)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if _, err := PriceSandboxUsage(u, DefaultSettings()); !errors.Is(err, ErrInvalidSandboxUsage) {
+		t.Fatalf("err=%v want ErrInvalidSandboxUsage", err)
 	}
 }

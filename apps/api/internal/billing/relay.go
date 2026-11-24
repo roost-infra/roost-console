@@ -26,21 +26,31 @@ var (
 )
 
 type RelayReservation struct {
-	ID        string
-	Amount    int64
-	ExpiresAt time.Time
+	ID              string
+	Amount          int64
+	ExpiresAt       time.Time
+	PriceVersion    string
+	SettingsVersion string
 }
 
 type RelayOperation struct {
-	Found         bool
-	Operation     string
-	Status        string
-	ReservationID string
-	Amount        int64
-	ErrorCode     string
-	ToolCharges   []ToolCharge
-	Compression   *Compression
-	Usage         *UsageEvent
+	Found           bool
+	Operation       string
+	Status          string
+	ReservationID   string
+	Amount          int64 // credits actually due
+	AmountMinor     int64 // exact priced minor; 0 on legacy operations
+	PolicyVersion   string
+	SettingsVersion string
+	UpstreamID      string
+	ErrorCode       string
+	ToolCharges     []ToolCharge
+	Compression     *Compression
+	// Pricing carries the V2 break-even report of the settlement, including
+	// the compression counterfactual.
+	Pricing *Charge
+	Usage   *UsageEvent
+	Debts   []Debt
 }
 
 // RelayIdentity is the identity an rk- relay token authorizes. OrgID is the
@@ -88,65 +98,13 @@ func (s *Store) RelayBalance(ctx context.Context, orgID string) (int64, error) {
 	return balance - reserved, nil
 }
 
-// RelayReserve holds the request's estimated spend. Replaying the same request
-// returns the first hold; a different amount on the same run_ref is a conflict.
-//
-// It deliberately avoids an explicit transaction and advisory locks: the lease
-// row is the idempotency record (unique org+product+run_ref) and one CTE both
-// reserves the wallet and inserts the lease atomically. This keeps the
-// pre-forwarding hop to two database round trips, which matters because this
-// call sits on the request's first-token latency path.
+// RelayReserve holds the request's estimated spend. It is the legacy
+// four-argument entry point; RelayReserveWithDetails additionally records the
+// price/settings version the request is locked to.
 func (s *Store) RelayReserve(ctx context.Context, orgID, requestID string, amount int64, currency string, ttl time.Duration) (RelayReservation, error) {
-	if amount < 0 {
-		return RelayReservation{}, errors.New("relay: reserve amount must be >= 0")
-	}
-	if ttl <= 0 {
-		ttl = 15 * time.Minute
-	}
-	// One statement for the common path: atomically reserve the wallet and
-	// insert the lease. Replays and races hit the unique key and fall back to a
-	// read below, so the request's first-token path pays one database round trip.
-	var out RelayReservation
-	var updated int64
-	err := s.Pool.QueryRow(ctx, `
-		with upd as (
-			update billing.wallets
-			set reserved_credits=reserved_credits+$3, version=version+1, updated_at=now()
-			where org_id=$1 and balance_credits-reserved_credits >= $3
-			returning balance_credits
-		), ins as (
-			insert into billing.usage_leases (org_id,product,run_ref,reserved_credits,status,expires_at)
-			select $1,'relay',$2,$3,'active',now()+make_interval(secs=>$4)
-			where exists (select 1 from upd)
-			returning id,reserved_credits,expires_at
-		)
-		select id,reserved_credits,expires_at,(select count(*) from upd) from ins`,
-		orgID, requestID, amount, int(ttl.Seconds())).
-		Scan(&out.ID, &out.Amount, &out.ExpiresAt, &updated)
-	if err == nil {
-		return out, nil
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		// Replay or a concurrent reserve won the unique key; return that hold.
-		var existing RelayReservation
-		var status string
-		if qerr := s.Pool.QueryRow(ctx, `
-			select id,reserved_credits,status,expires_at from billing.usage_leases
-			where org_id=$1 and product='relay' and run_ref=$2`, orgID, requestID).
-			Scan(&existing.ID, &existing.Amount, &status, &existing.ExpiresAt); qerr == nil {
-			if existing.Amount != amount || status != "active" {
-				return RelayReservation{}, ErrRelayConflict
-			}
-			return existing, nil
-		}
-	}
-	if errors.Is(err, pgx.ErrNoRows) || updated == 0 {
-		// Either the wallet does not exist or the conditional update found no
-		// free balance; both are an insufficient-balance rejection.
-		return RelayReservation{}, ErrInsufficientCredits
-	}
-	return RelayReservation{}, err
+	return s.RelayReserveWithDetails(ctx, RelayReserveInput{
+		OrgID: orgID, RequestID: requestID, Amount: amount, Currency: currency, TTL: ttl,
+	})
 }
 
 // RelaySettle charges the reservation's actual spend exactly once, keyed by the
@@ -230,51 +188,64 @@ func (s *Store) RelaySettleWithDetails(ctx context.Context, reservationID, settl
 		}
 		return RelayOperation{}, err
 	}
-	if status == "released" || status == "expired" {
+	// A released lease must never be settled again; the error code is
+	// lease_expired per the contract. An expired lease is allowed: its hold was
+	// already released by ExpireLeases, so only the spend is charged.
+	if status == "released" {
 		return RelayOperation{}, ErrRelayReleased
 	}
 	if status == "settled" {
-		var settled int64
-		_ = tx.QueryRow(ctx, `select coalesce(settled_credits,0) from billing.usage_leases where id=$1`, reservationID).Scan(&settled)
-		existing, qerr := queryToolCharges(ctx, tx, reservationID)
-		if qerr != nil {
-			return RelayOperation{}, qerr
-		}
-		existingCompression, qerr := queryCompression(ctx, tx, reservationID)
-		if qerr != nil {
-			return RelayOperation{}, qerr
-		}
-		existingUsage, qerr := queryUsageEvent(ctx, tx, reservationID)
-		if qerr != nil {
-			return RelayOperation{}, qerr
-		}
-		return RelayOperation{Found: true, Operation: "settle", Status: "settled", ReservationID: reservationID, Amount: settled, ToolCharges: existing, Compression: existingCompression, Usage: existingUsage}, tx.Commit(ctx)
+		// A second settlement for an already-settled lease is a new booking
+		// attempt (the same idempotency key was handled above), so reject it.
+		return RelayOperation{}, ErrRelayConflict
 	}
 	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtext($1))`, "wallet:"+orgID); err != nil {
 		return RelayOperation{}, err
 	}
-	var balance int64
-	if err := tx.QueryRow(ctx, `select balance_credits from billing.wallets where org_id=$1 for update`, orgID).Scan(&balance); err != nil {
+	if status == "expired" {
+		// ExpireLeases already released the hold; subtracting it again would
+		// corrupt the wallet's reserved total.
+		reserved = 0
+	}
+	var balance, walletReserved int64
+	if err := tx.QueryRow(ctx, `select balance_credits,reserved_credits from billing.wallets where org_id=$1 for update`, orgID).Scan(&balance, &walletReserved); err != nil {
 		return RelayOperation{}, err
 	}
-	extra := amount - reserved
-	if extra > 0 && balance-reserved < extra {
-		return RelayOperation{}, ErrInsufficientCredits
+	// Split an unaffordable charge into a partial debit plus a debt instead of
+	// refusing the whole settlement (the usage already happened upstream).
+	available := balance - walletReserved
+	maxCharge := reserved + available
+	charged := amount
+	if charged > maxCharge {
+		charged = maxCharge
+	}
+	if charged < 0 {
+		charged = 0
+	}
+	var debt *Debt
+	if amount > charged {
+		debt, err = insertDebt(ctx, tx, orgID, RelayProduct, requestID, amount-charged, DebtReasonInsufficientBalance)
+		if err != nil {
+			return RelayOperation{}, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		update billing.wallets set balance_credits=greatest(0,balance_credits-$2),
 			reserved_credits=greatest(0,reserved_credits-$3),version=version+1,updated_at=now()
-		where org_id=$1`, orgID, amount, reserved); err != nil {
+		where org_id=$1`, orgID, charged, reserved); err != nil {
 		return RelayOperation{}, err
 	}
-	tag, err := tx.Exec(ctx, `
-		insert into billing.ledger (org_id,product,delta_credits,reason,ref_id,idempotency_key)
-		values ($1,'relay',$2,'relay_usage',$3,$4)
-		on conflict (idempotency_key) do nothing`, orgID, -amount, reservationID, idempotencyKey)
+	var tag pgconn.CommandTag
+	if charged > 0 {
+		tag, err = tx.Exec(ctx, `
+			insert into billing.ledger (org_id,product,delta_credits,reason,ref_id,idempotency_key)
+			values ($1,'relay',$2,'relay_usage',$3,$4)
+			on conflict (idempotency_key) do nothing`, orgID, -charged, reservationID, idempotencyKey)
+	}
 	if err != nil {
 		return RelayOperation{}, err
 	}
-	if tag.RowsAffected() == 0 {
+	if charged > 0 && tag.RowsAffected() == 0 {
 		// A concurrent settle with the same key won after our initial read.
 		// Roll back the wallet change and return the winner's booking; this also
 		// guarantees the breakdown is never written twice.
@@ -293,7 +264,7 @@ func (s *Store) RelaySettleWithDetails(ctx context.Context, reservationID, settl
 	if _, err := tx.Exec(ctx, `update billing.usage_leases set status='settled',settled_credits=$2 where id=$1`, reservationID, amount); err != nil {
 		return RelayOperation{}, err
 	}
-	return RelayOperation{Found: true, Operation: "settle", Status: "settled", ReservationID: reservationID, Amount: amount, ToolCharges: charges, Compression: compression, Usage: usage}, tx.Commit(ctx)
+	return RelayOperation{Found: true, Operation: "settle", Status: "settled", ReservationID: reservationID, Amount: amount, AmountMinor: amount * MinorPerCredit, ToolCharges: charges, Compression: compression, Usage: usage, Debts: debtsOrEmpty(debt)}, tx.Commit(ctx)
 }
 
 // RelayRelease frees a hold that never produced billable upstream work.

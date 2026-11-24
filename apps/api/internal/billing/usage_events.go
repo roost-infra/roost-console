@@ -163,3 +163,23 @@ func queryUsageEvent(ctx context.Context, q usageEventQuerier, leaseID string) (
 	}
 	return &u, nil
 }
+
+// insertUsageEventV2 writes a usage row together with the V2 provenance:
+// upstream_id attributes cost to a supplier and policy_version records the
+// price book version the charge used.
+func insertUsageEventV2(ctx context.Context, tx pgx.Tx, orgID, requestID, settlementID, leaseID string, u *UsageEvent, upstreamID, policyVersion string) error {
+	if u == nil {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		insert into billing.usage_events
+			(org_id,request_id,settlement_id,lease_id,model,session_id,requests,input_tokens,
+			 output_tokens,cache_read_tokens,cache_write_tokens,upstream_cost_minor,
+			 upstream_id,policy_version)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		on conflict (settlement_id) do nothing`,
+		orgID, requestID, settlementID, leaseID, u.Model, nullIfEmpty(u.SessionID), u.Requests, u.InputTokens,
+		u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens, u.UpstreamCostMinor,
+		nullIfEmpty(upstreamID), nullIfEmpty(policyVersion))
+	return err
+}

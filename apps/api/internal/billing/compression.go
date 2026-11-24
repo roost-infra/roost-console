@@ -206,3 +206,91 @@ func insertCompression(ctx context.Context, tx pgx.Tx, orgID, requestID, settlem
 		c.SummaryCostMinor)
 	return err
 }
+
+// insertCompressionV2 persists the counterfactual compression report in the
+// columns added by 0015: what was charged, what the user's share was, the
+// retail/cost used and the net gain versus not compressing at all.
+func insertCompressionV2(ctx context.Context, tx pgx.Tx, orgID, requestID, settlementID, leaseID string, c *CompressionCharge) error {
+	if c == nil {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		insert into billing.usage_compression
+			(org_id,request_id,settlement_id,lease_id,applied,original_input_tokens,
+			 compressed_input_tokens,saved_tokens,user_share_tokens,user_share_minor,
+			 summary_cost_minor,charge_input_tokens,upstream_input_tokens,user_share_bps,
+			 retail_minor_per_million,cost_minor_per_million,cache_loss_minor,
+			 no_compression_margin_minor,compressed_margin_minor,net_gain_minor)
+		values ($1,$2,$3,$4,true,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		on conflict (settlement_id) do nothing`,
+		orgID, requestID, settlementID, leaseID, c.BeforeInputTokens, c.AfterInputTokens,
+		c.SavedTokens, c.UserShareTokens, c.UserShareMinor, c.SummaryCostMinor,
+		c.ChargeInputTokens, c.AfterInputTokens, c.UserShareBPS,
+		c.RetailInputMinorPerMillion, c.CostInputMinorPerMillion, c.CacheLossMinor,
+		c.NoCompressionMarginMinor, c.CompressedMarginMinor, c.NetGainMinor)
+	return err
+}
+
+// queryCompressionCharge reloads the V2 counterfactual report of a settled
+// lease for the idempotent replay path.
+func queryCompressionCharge(ctx context.Context, q compressionQuerier, leaseID string) (*CompressionCharge, error) {
+	var (
+		c                                                         CompressionCharge
+		chargeInput, upstreamInput, shareBPS                      *int64
+		retail, cost, summary, cacheLoss, noComp, compMargin, net *int64
+		saved, userShare, userShareMinor                          int64
+	)
+	err := q.QueryRow(ctx, `
+		select coalesce(original_input_tokens,0),coalesce(compressed_input_tokens,0),
+		       coalesce(saved_tokens,0),coalesce(user_share_tokens,0),coalesce(user_share_minor,0),
+		       charge_input_tokens,upstream_input_tokens,user_share_bps,
+		       retail_minor_per_million,cost_minor_per_million,coalesce(summary_cost_minor,0),
+		       cache_loss_minor,no_compression_margin_minor,compressed_margin_minor,net_gain_minor
+		from billing.usage_compression
+		where lease_id=$1
+		order by id limit 1`, leaseID).
+		Scan(&c.BeforeInputTokens, &c.AfterInputTokens, &saved, &userShare, &userShareMinor,
+			&chargeInput, &upstreamInput, &shareBPS, &retail, &cost, &summary,
+			&cacheLoss, &noComp, &compMargin, &net)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	c.Applied = true
+	c.SavedTokens = saved
+	c.UserShareTokens = userShare
+	c.UserShareMinor = userShareMinor
+	if chargeInput != nil {
+		c.ChargeInputTokens = *chargeInput
+	}
+	if upstreamInput != nil {
+		c.AfterInputTokens = *upstreamInput
+	}
+	if shareBPS != nil {
+		c.UserShareBPS = *shareBPS
+	}
+	if retail != nil {
+		c.RetailInputMinorPerMillion = *retail
+	}
+	if cost != nil {
+		c.CostInputMinorPerMillion = *cost
+	}
+	if summary != nil {
+		c.SummaryCostMinor = *summary
+	}
+	if cacheLoss != nil {
+		c.CacheLossMinor = *cacheLoss
+	}
+	if noComp != nil {
+		c.NoCompressionMarginMinor = *noComp
+	}
+	if compMargin != nil {
+		c.CompressedMarginMinor = *compMargin
+	}
+	if net != nil {
+		c.NetGainMinor = *net
+	}
+	return &c, nil
+}

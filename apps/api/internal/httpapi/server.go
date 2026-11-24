@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JingxuanC/roost-console/apps/api/internal/auth"
@@ -66,10 +67,18 @@ type Server struct {
 	overview       adminOverviewStore
 	sandboxUsage   sandboxUsageRecorder
 	billingDetails billingDetailsStore
+	pricing        priceBookStore
 	referrals      referralBilling
 	adminGift      adminGiftBilling
 	adminReferral  adminReferralBilling
 	orderAdmin     orderAdmin
+
+	// 60-second in-process cache of the current price book. An explicit `at`
+	// query bypasses it.
+	pricingMu         sync.Mutex
+	pricingCached     billing.PriceBook
+	pricingCachedAt   time.Time
+	pricingCacheValid bool
 
 	// Public path prefixes this deployment is mounted under (e.g. "/console-api"
 	// behind the nginx prefix strip). First-party clients sign the public path;
@@ -97,6 +106,7 @@ func New(cfg config.Config, store *billing.Store, verifier *auth.Verifier, pay *
 		s.overview = store
 		s.sandboxUsage = store
 		s.billingDetails = store
+		s.pricing = store
 		s.referrals = store
 		s.adminGift = store
 		s.adminReferral = store
@@ -165,6 +175,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/billing/leases/acquire", s.withCompatService(s.compatAcquire))
 	mux.HandleFunc("POST /api/auth/billing/leases/release", s.withCompatService(s.compatRelease))
 	// Relay (API marketplace) platform contract.
+	mux.HandleFunc("GET /v1/pricing/book", s.publicPricingBook)
+	mux.HandleFunc("GET /internal/v1/pricing/book", s.withService(s.internalPricingBook))
 	mux.HandleFunc("POST /v1/relay/api-keys/introspect", s.withRelayService(s.relayIntrospect))
 	mux.HandleFunc("POST /v1/relay/reservations", s.withRelayService(s.relayReserve))
 	mux.HandleFunc("POST /v1/relay/reservations/{reservationID}/settle", s.withRelayService(s.relaySettle))
@@ -432,6 +444,7 @@ var serviceScopes = map[string][]string{
 		"/internal/v1/entitlements/resolve",
 		"/internal/v1/usage/leases",
 		"/internal/v1/usage/sandbox",
+		"/internal/v1/pricing/book",
 	},
 	"dslpha": {
 		"/api/auth/validate",
@@ -439,10 +452,11 @@ var serviceScopes = map[string][]string{
 		"/internal/v1/orgs/resolve-user",
 		"/internal/v1/usage/charge",
 		"/internal/v1/usage/sandbox",
+		"/internal/v1/pricing/book",
 	},
 	"causal":      {"/internal/v1/usage/charge"},
 	"causal-sync": {"/internal/v1/products/causal-memory/tokens"},
-	"relay":       {"/v1/relay/", "/internal/v1/products/causal-memory/tokens"},
+	"relay":       {"/v1/relay/", "/internal/v1/products/causal-memory/tokens", "/internal/v1/pricing/book"},
 	"root":        {"*"},
 }
 
@@ -1239,9 +1253,13 @@ func (s *Server) compatAcquire(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) compatRelease(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		UserID       string  `json:"user_id"`
-		RunRef       string  `json:"run_ref"`
-		SpentCredits float64 `json:"spent_credits"`
+		UserID       string               `json:"user_id"`
+		RunRef       string               `json:"run_ref"`
+		Generation   int64                `json:"generation"`
+		Byok         bool                 `json:"byok"`
+		ModelUsage   []billing.ModelUsage `json:"model_usage"`
+		SpentUSD     *float64             `json:"spent_usd"`
+		SpentCredits *float64             `json:"spent_credits"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RunRef == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "run_ref is required")
@@ -1252,17 +1270,55 @@ func (s *Server) compatRelease(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	actual := int64(math.Ceil(math.Max(0, req.SpentCredits)))
-	if actual > 0 {
-		_, err = s.store.SettleByRun(r.Context(), org.ID, "dsalpha", req.RunRef, actual)
-	} else {
-		err = s.store.ReleaseByRun(r.Context(), org.ID, "dsalpha", req.RunRef)
+	hasLegacySpend := req.SpentCredits != nil && *req.SpentCredits > 0
+	if req.Byok || len(req.ModelUsage) > 0 || req.SpentUSD != nil || hasLegacySpend {
+		in := billing.SettleRunInput{
+			OrgID:      org.ID,
+			Product:    "dsalpha",
+			RunRef:     req.RunRef,
+			ModelUsage: req.ModelUsage,
+			SpentUSD:   req.SpentUSD,
+			Byok:       req.Byok,
+		}
+		if hasLegacySpend {
+			credits := int64(math.Ceil(*req.SpentCredits))
+			in.ActualCredits = &credits
+		}
+		result, err := s.store.SettleByRunV2(r.Context(), in)
+		if err != nil {
+			switch {
+			case errors.Is(err, billing.ErrUnknownModel), errors.Is(err, billing.ErrPriceTierNotFound):
+				writeError(w, http.StatusUnprocessableEntity, "unknown_model", "a reported model is not in the price book")
+			case errors.Is(err, billing.ErrInvalidPricing):
+				writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			default:
+				s.fail(w, err)
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"released":         result.Settled,
+			"charged_credits":  result.ChargedCredits,
+			"amount_minor":     result.AmountMinor,
+			"price_version":    result.PriceVersion,
+			"settings_version": result.SettingsVersion,
+			"fallback":         result.Fallback,
+			"debts":            debtsJSON(result.Debts),
+		})
+		return
 	}
-	if err != nil {
+	if err := s.store.ReleaseByRun(r.Context(), org.ID, "dsalpha", req.RunRef); err != nil {
 		s.fail(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"released": true})
+}
+
+func debtsJSON(debts []billing.Debt) []billing.Debt {
+	if debts == nil {
+		return []billing.Debt{}
+	}
+	return debts
 }
 
 func (s *Server) resolveUserOrg(w http.ResponseWriter, r *http.Request) {

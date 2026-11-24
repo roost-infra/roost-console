@@ -55,6 +55,7 @@ func (s *Server) recordSandboxUsage(w http.ResponseWriter, r *http.Request) {
 		"charged_credits": result.ChargedCredits,
 		"balance_credits": result.BalanceCredits,
 		"credits_minor":   result.Usage.CreditsMinor,
+		"gpu_unpriced":    result.Usage.GPUUnpriced,
 		"replayed":        result.Replayed,
 	})
 }
