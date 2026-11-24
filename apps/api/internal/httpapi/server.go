@@ -1054,7 +1054,18 @@ func (s *Server) epusdtNotify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown order", http.StatusNotFound)
 		return
 	}
-	if n.TradeID == "" || n.TradeID != o.ProviderOrderID {
+	if n.TradeID == "" {
+		s.log.Warn("epusdt notify without trade id", "order", o.ID)
+		http.Error(w, "unknown order", http.StatusNotFound)
+		return
+	}
+	if o.ProviderOrderID == "" {
+		// The gateway created a checkout but we never stored its trade id: the
+		// create call timed out or the attach write failed. The money is real,
+		// so accept it; signature, PID, order number and amount are all
+		// verified by now.
+		s.log.Warn("epusdt notify for order without stored trade id", "order", o.ID, "trade_id", n.TradeID)
+	} else if n.TradeID != o.ProviderOrderID {
 		// A signed callback for a checkout this order never opened.
 		s.log.Warn("epusdt notify trade id mismatch", "order", o.ID, "trade_id", n.TradeID)
 		http.Error(w, "unknown order", http.StatusNotFound)

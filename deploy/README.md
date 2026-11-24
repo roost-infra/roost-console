@@ -38,7 +38,7 @@ roost-console-api.service       systemd
 curl -X POST https://www.roostbots.com/console-api/v1/admin/orders/<orderID>/fulfill \
   -H "Authorization: Bearer <admin-supabase-jwt>" \
   -H "Content-Type: application/json" \
-  -d '{"provider_trade_no":"<虎皮椒交易号>"}'
+  -d '{"provider_trade_no":"<虎皮椒交易号，或 USDT 订单用 epusdt_<网关 trade_id>>"}'
 ```
 
   幂等：已 fulfilled 再次调用返回 `already_fulfilled`；refunded 拒绝。
