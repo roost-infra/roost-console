@@ -479,20 +479,25 @@ function Overview({ me, token }: { me: MeResponse; token: string }) {
   const orgId = me.org.id;
   const [keys, setKeys] = useState<RelayKey[] | null>(null);
   const [week, setWeek] = useState<UsageTotals | null>(null);
+  const [keysFailed, setKeysFailed] = useState(false);
+  const [weekFailed, setWeekFailed] = useState(false);
+  const [reload, setReload] = useState(0);
   const [created, setCreated] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
+    setKeysFailed(false);
+    setWeekFailed(false);
     api.relayKeys(token, orgId)
       .then((data) => { if (!cancelled) setKeys((data.tokens ?? []).filter((k) => !k.revoked_at)); })
-      .catch(() => { if (!cancelled) setKeys([]); });
+      .catch(() => { if (!cancelled) setKeysFailed(true); });
     api.usageSummary(token, orgId, 7)
       .then((data) => { if (!cancelled) setWeek(data.totals); })
-      .catch(() => { /* the overview stays usable without analytics */ });
+      .catch(() => { if (!cancelled) setWeekFailed(true); });
     return () => { cancelled = true; };
-  }, [token, orgId]);
+  }, [token, orgId, reload]);
 
   async function createKey() {
     setBusy(true);
@@ -544,7 +549,9 @@ function Overview({ me, token }: { me: MeResponse; token: string }) {
               <span className="step__num">1</span>
               <div className="step__body">
                 <h3>创建 API Key</h3>
-                {keys === null ? (
+                {keysFailed ? (
+                  <p className="muted">Key 列表暂时读取失败。<button className="link-btn" onClick={() => setReload((n) => n + 1)}>重试</button></p>
+                ) : keys === null ? (
                   <p className="muted">正在读取 Key…</p>
                 ) : hasKey ? (
                   <p className="muted">已有 {keys.length} 个可用 Key。完整 Key 只在创建时显示，丢失可再建一个。</p>
@@ -556,7 +563,7 @@ function Overview({ me, token }: { me: MeResponse; token: string }) {
                 {hasKey ? (
                   <a className="btn btn--ghost btn--small" href="#/keys">管理 Key</a>
                 ) : (
-                  <button className="btn btn--accent btn--small" onClick={() => void createKey()} disabled={busy || keys === null}>
+                  <button className="btn btn--accent btn--small" onClick={() => void createKey()} disabled={busy || keys === null || keysFailed}>
                     {busy ? '创建中…' : '创建 API Key'}
                   </button>
                 )}
@@ -592,11 +599,15 @@ function Overview({ me, token }: { me: MeResponse; token: string }) {
           </div>
           <p className="balance__cash">≈ ¥{(wallet.available_credits / 100).toFixed(2)} · 所有产品共用</p>
           <a className="btn btn--ink btn--wide" href="#/wallet">充值</a>
-          <div className="balance__stats">
-            <div><span>近 7 天消费</span><strong>{minorCredits(weekTotals.credits_minor)}</strong></div>
-            <div><span>近 7 天请求</span><strong>{credits(weekTotals.requests)}</strong></div>
-            <div><span>近 7 天 Tokens</span><strong>{tokens(weekTotals.total_tokens)}</strong></div>
-          </div>
+          {weekFailed ? (
+            <p className="muted balance__stats-error">近 7 天用量暂不可用。<button className="link-btn" onClick={() => setReload((n) => n + 1)}>重试</button></p>
+          ) : (
+            <div className="balance__stats">
+              <div><span>近 7 天消费</span><strong>{week ? minorCredits(weekTotals.credits_minor) : '…'}</strong></div>
+              <div><span>近 7 天请求</span><strong>{week ? credits(weekTotals.requests) : '…'}</strong></div>
+              <div><span>近 7 天 Tokens</span><strong>{week ? tokens(weekTotals.total_tokens) : '…'}</strong></div>
+            </div>
+          )}
           <a className="text-link" href="#/usage">查看用量详情 →</a>
         </section>
       </div>
@@ -1257,6 +1268,7 @@ function UsageDashboard({ token, orgId }: { token: string; orgId: string }) {
 
 function CausalMemory({ token, orgId }: { token: string; orgId: string }) {
   const [mcpToken, setMcpToken] = useState('');
+  const [mcpUrl, setMcpUrl] = useState(MEMORY_MCP_URL);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
@@ -1267,6 +1279,7 @@ function CausalMemory({ token, orgId }: { token: string; orgId: string }) {
     try {
       const issued = await api.issueCausalToken(token, orgId);
       setMcpToken(issued.token);
+      if (issued.mcp_url) setMcpUrl(issued.mcp_url);
     } catch (err) {
       setError(err instanceof Error ? err.message : '生成失败');
     } finally {
@@ -1290,7 +1303,7 @@ function CausalMemory({ token, orgId }: { token: string; orgId: string }) {
           生成一个 MCP Token，把下面的地址加到 Claude Code、Cursor 等支持 MCP 的客户端，
           Agent 就能跨会话记住项目、偏好和结论。调用和存储从组织余额扣费。
         </p>
-        <CopyField label="MCP 地址" value={MEMORY_MCP_URL} />
+        <CopyField label="MCP 地址" value={mcpUrl} hint={mcpToken ? undefined : '以生成 Token 后显示的地址为准'} />
       </div>
       <div className="causal__action">
         {mcpToken ? (
@@ -1300,7 +1313,7 @@ function CausalMemory({ token, orgId }: { token: string; orgId: string }) {
             <button className="btn btn--ghost btn--small" onClick={() => void copy()}>{copied ? '已复制' : '复制 token'}</button>
             <p className="muted causal__hint">在 MCP 客户端里配置 Authorization: Bearer &lt;token&gt;</p>
             <pre className="snippet__code causal__config"><code>{`claude mcp add --transport http roost-memory \\
-  ${MEMORY_MCP_URL} \\
+  ${mcpUrl} \\
   --header "Authorization: Bearer ${mcpToken}"`}</code></pre>
           </>
         ) : (
@@ -1523,33 +1536,54 @@ function RelayKeys({ token, orgId }: { token: string; orgId: string }) {
   const [confirming, setConfirming] = useState('');
   const [error, setError] = useState('');
 
+  // Only the newest list request may write state, so a slow initial read
+  // cannot overwrite the list refreshed after a create or revoke.
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       const data = await api.relayKeys(token, orgId);
+      if (seq !== loadSeq.current) return;
       setKeys((data.tokens ?? []).filter((k) => !k.revoked_at));
+      setError('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载 API Key 失败');
+      if (seq !== loadSeq.current) return;
+      setError(err instanceof Error ? `加载 API Key 失败：${err.message}` : '加载 API Key 失败');
     } finally {
-      setLoaded(true);
+      if (seq === loadSeq.current) setLoaded(true);
     }
   }, [token, orgId]);
   useEffect(() => { void load(); }, [load]);
 
+  // Key mutations are mutually exclusive: one create or revoke at a time.
   async function create() {
-    setBusy('create'); setError('');
+    if (busy) return;
+    setBusy('create'); setError(''); setConfirming('');
     try {
       const data = await api.createRelayKey(token, orgId);
       setCreated(data.token);
-      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建 API Key 失败');
-    } finally { setBusy(''); }
+      setBusy('');
+      return;
+    }
+    setBusy('');
+    await load();
   }
   async function revoke(hash: string) {
+    if (busy) return;
     setBusy(hash); setError('');
-    try { await api.revokeRelayKey(token, orgId, hash); setConfirming(''); await load(); }
-    catch (err) { setError(err instanceof Error ? err.message : '吊销失败'); }
-    finally { setBusy(''); }
+    try {
+      await api.revokeRelayKey(token, orgId, hash);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '吊销失败');
+      setBusy('');
+      return;
+    }
+    setKeys((list) => list.filter((k) => k.token_hash !== hash));
+    setConfirming('');
+    setBusy('');
+    await load();
   }
 
   return (
@@ -1571,7 +1605,7 @@ function RelayKeys({ token, orgId }: { token: string; orgId: string }) {
             <p className="kicker">API KEYS</p>
             <h2 id="keys-title">我的 API Key</h2>
           </div>
-          <button className="btn btn--accent" onClick={() => void create()} disabled={busy === 'create'}>
+          <button className="btn btn--accent" onClick={() => void create()} disabled={!!busy || !loaded}>
             {busy === 'create' ? '创建中…' : '+ 创建 API Key'}
           </button>
         </div>
@@ -1580,10 +1614,10 @@ function RelayKeys({ token, orgId }: { token: string; orgId: string }) {
         <div className="table table--keys">
           <div className="table__row table__row--head"><span>Key 指纹</span><span>创建时间</span><span>最近使用</span><span>状态</span><span /></div>
           {!loaded && <div className="table__empty">正在加载…</div>}
-          {loaded && keys.length === 0 && (
+          {loaded && keys.length === 0 && !error && (
             <div className="table__empty table__empty--cta">
               <span>还没有 API Key，创建一个就能开始调用。</span>
-              <button className="btn btn--accent btn--small" onClick={() => void create()} disabled={busy === 'create'}>创建第一个 Key</button>
+              <button className="btn btn--accent btn--small" onClick={() => void create()} disabled={!!busy}>创建第一个 Key</button>
             </div>
           )}
           {keys.map((k) => (
@@ -1595,13 +1629,13 @@ function RelayKeys({ token, orgId }: { token: string; orgId: string }) {
               <span className="table__actions">
                 {confirming === k.token_hash ? (
                   <>
-                    <button className="btn btn--danger btn--small" disabled={busy === k.token_hash} onClick={() => void revoke(k.token_hash)}>
+                    <button className="btn btn--danger btn--small" disabled={!!busy} onClick={() => void revoke(k.token_hash)}>
                       {busy === k.token_hash ? '吊销中…' : '确认吊销'}
                     </button>
                     <button className="btn btn--ghost btn--small" onClick={() => setConfirming('')}>取消</button>
                   </>
                 ) : (
-                  <button className="btn btn--ghost btn--small" onClick={() => setConfirming(k.token_hash)}>吊销</button>
+                  <button className="btn btn--ghost btn--small" disabled={!!busy} onClick={() => setConfirming(k.token_hash)}>吊销</button>
                 )}
               </span>
             </div>

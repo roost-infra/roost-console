@@ -34,9 +34,11 @@
   --accent-2: #ff9a4d;
   --accent-ink: #b8461a;
   --accent-soft: rgba(244, 106, 46, .12);
-  --accent-grad: linear-gradient(135deg, #ff8a45 0%, #f4572e 100%);
+  --accent-grad: linear-gradient(135deg, #cc4510 0%, #b23a0b 100%);
+  --on-accent: #ffffff;
   --green: #16a36b;
   --green-soft: rgba(22, 163, 107, .12);
+  --green-ink: #0a6b45;
   --blue: #4f7cff;
   --violet: #8b6cff;
   --teal: #19b3a6;
@@ -104,11 +106,11 @@
 .btn:hover { transform: translateY(-1px); }
 .btn:disabled { opacity: .5; cursor: default; transform: none; }
 .btn--ink { background: var(--ink); color: #fff; box-shadow: 0 8px 20px -10px rgba(15, 23, 41, .6); }
-.btn--accent { background: var(--accent-grad); color: #fff; box-shadow: 0 10px 24px -10px rgba(244, 87, 46, .7), inset 0 1px 0 rgba(255, 255, 255, .25); }
+.btn--accent { background: var(--accent-grad); color: var(--on-accent); box-shadow: 0 10px 24px -10px rgba(244, 87, 46, .7), inset 0 1px 0 rgba(255, 255, 255, .25); }
 .btn--ghost { border-color: var(--line-strong); background: rgba(255, 255, 255, .5); }
 .btn--ghost:hover { background: rgba(255, 255, 255, .85); }
 .btn--glass { border-color: var(--glass-border); background: var(--glass-strong); box-shadow: var(--shadow-glass); }
-.btn--danger { background: var(--red); color: #fff; }
+.btn--danger { background: #c4262b; color: #fff; }
 .btn--small { padding: 7px 13px; font-size: 13px; }
 .btn--wide { width: 100%; }
 
@@ -124,4 +126,4 @@
   color: var(--ink-2);
 }
 .pill--accent { background: var(--accent-soft); color: var(--accent-ink); }
-.pill--green { background: var(--green-soft); color: var(--green); }
+.pill--green { background: var(--green-soft); color: var(--green-ink); }

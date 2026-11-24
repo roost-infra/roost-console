@@ -30,17 +30,42 @@ const LEGACY: Record<string, RouteKey> = {
 };
 
 function parseHash(hash: string): RouteKey {
-  const raw = hash.replace(/^#\/?/, '').split(/[?&]/)[0];
-  if ((ROUTES as string[]).includes(raw)) return raw as RouteKey;
-  return LEGACY[raw] ?? 'overview';
+  if (hash.startsWith('#/')) {
+    const raw = hash.slice(2).split(/[?&]/)[0];
+    return (ROUTES as string[]).includes(raw) ? (raw as RouteKey) : 'overview';
+  }
+  const legacy = hash.replace(/^#/, '').split(/[?&]/)[0];
+  return LEGACY[legacy] ?? 'overview';
+}
+
+// A legacy anchor (#orders) names an element on the routed page; scroll to it
+// once that page has mounted. Route links (#/billing) start at the top.
+function legacyAnchor(hash: string) {
+  return hash.startsWith('#/') ? '' : hash.replace(/^#/, '').split(/[?&]/)[0];
+}
+
+function revealAnchor(hash: string) {
+  const id = legacyAnchor(hash);
+  if (!id) {
+    window.scrollTo({ top: 0 });
+    return;
+  }
+  let tries = 0;
+  const seek = () => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ block: 'start' });
+    else if (tries++ < 20) window.setTimeout(seek, 100);
+  };
+  window.setTimeout(seek, 0);
 }
 
 export function useRoute(): [RouteKey, (next: RouteKey) => void] {
   const [route, setRoute] = useState<RouteKey>(() => parseHash(window.location.hash));
   useEffect(() => {
+    if (legacyAnchor(window.location.hash)) revealAnchor(window.location.hash);
     const onHash = () => {
       setRoute(parseHash(window.location.hash));
-      window.scrollTo({ top: 0 });
+      revealAnchor(window.location.hash);
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);

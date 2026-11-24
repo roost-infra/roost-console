@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 
 // Public addresses of the Roost relay. One key works on every protocol below;
 // a client only needs the address in its "Base URL" field plus the key.
@@ -58,10 +58,13 @@ export async function copyText(text: string): Promise<boolean> {
 
 export function CopyButton({ text, label = '复制', className = '' }: { text: string; label?: string; className?: string }) {
   const [state, setState] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
   async function onClick() {
     const ok = await copyText(text);
+    if (!mounted.current) return;
     setState(ok ? 'ok' : 'fail');
-    window.setTimeout(() => setState('idle'), 1600);
+    window.setTimeout(() => { if (mounted.current) setState('idle'); }, 1600);
   }
   return (
     <button type="button" className={`copy-btn ${state === 'ok' ? 'is-ok' : ''} ${className}`} onClick={() => void onClick()}>
@@ -167,16 +170,36 @@ export function SnippetTabs({ apiKey = '' }: { apiKey?: string }) {
   const items = snippets(apiKey);
   const [active, setActive] = useState(items[0].key);
   const current = items.find((item) => item.key === active) ?? items[0];
+  const baseId = useId();
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const index = items.findIndex((item) => item.key === active);
+    let next = -1;
+    if (event.key === 'ArrowRight') next = (index + 1) % items.length;
+    else if (event.key === 'ArrowLeft') next = (index - 1 + items.length) % items.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = items.length - 1;
+    if (next < 0) return;
+    event.preventDefault();
+    setActive(items[next].key);
+    tabRefs.current[next]?.focus();
+  }
+
   return (
     <div className="snippet">
       <div className="snippet__bar">
-        <div className="seg" role="tablist" aria-label="接入示例">
-          {items.map((item) => (
+        <div className="seg" role="tablist" aria-label="接入示例" onKeyDown={onKeyDown}>
+          {items.map((item, index) => (
             <button
               key={item.key}
+              ref={(el) => { tabRefs.current[index] = el; }}
+              id={`${baseId}-tab-${item.key}`}
               type="button"
               role="tab"
               aria-selected={item.key === active}
+              aria-controls={`${baseId}-panel`}
+              tabIndex={item.key === active ? 0 : -1}
               className={`seg__btn ${item.key === active ? 'is-active' : ''}`}
               onClick={() => setActive(item.key)}
             >
@@ -184,18 +207,59 @@ export function SnippetTabs({ apiKey = '' }: { apiKey?: string }) {
             </button>
           ))}
         </div>
-        <CopyButton text={current.code} label="复制代码" />
+        {/* Keyed by tab so a copy result never carries over to another snippet. */}
+        <CopyButton key={current.key} text={current.code} label="复制代码" />
       </div>
-      <pre className="snippet__code"><code>{current.code}</code></pre>
+      <pre
+        className="snippet__code"
+        id={`${baseId}-panel`}
+        role="tabpanel"
+        aria-labelledby={`${baseId}-tab-${current.key}`}
+        tabIndex={0}
+      ><code>{current.code}</code></pre>
       {!apiKey && <p className="snippet__hint">把 <code>{KEY_PLACEHOLDER}</code> 换成你创建的 API Key。</p>}
     </div>
   );
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input, textarea, select, [tabindex]:not([tabindex="-1"])';
+
 export function KeyCreatedModal({ apiKey, onClose }: { apiKey: string; onClose: () => void }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    panel?.querySelector<HTMLElement>('.copy-btn')?.focus();
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== 'Tab' || !panel) return;
+      const nodes = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (nodes.length === 0) return;
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      else if (!panel.contains(document.activeElement)) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      // The trigger may have been replaced (first-key button → "管理 Key").
+      if (opener && opener.isConnected) opener.focus();
+      else document.querySelector<HTMLElement>('main a[href="#/keys"], main .btn')?.focus();
+    };
+  }, []);
+
   return (
     <div className="modal" role="dialog" aria-modal="true" aria-label="API Key 已创建">
-      <div className="modal__panel modal__panel--wide">
+      <div className="modal__panel modal__panel--wide" ref={panelRef}>
         <button className="modal__close" onClick={onClose} aria-label="关闭">×</button>
         <p className="kicker">API KEY 已创建</p>
         <h2>复制并保存你的 Key</h2>
