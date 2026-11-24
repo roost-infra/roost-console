@@ -366,3 +366,61 @@ func loadSettlementSettings(ctx context.Context, q settingsQuerier, version stri
 	}
 	return settings, version, nil
 }
+
+// SettingsFlat returns the effective settings as a flat a.b key map plus the
+// special `settings_version` key, which is the shape product services consume
+// (GET /internal/v1/billing/settings). Stored rows win over the contract
+// defaults; values keep their JSON scalar type (numbers stay numbers).
+func (s *Store) SettingsFlat(ctx context.Context) (map[string]any, error) {
+	defaults := DefaultSettings()
+	out := map[string]any{
+		"settings_version":                  defaults.Version,
+		SettingFXUSDToCredits:               defaults.FXUSDToCredits,
+		SettingCreditYuan:                   defaults.CreditYuan,
+		SettingRounding:                     defaults.Rounding,
+		SettingMinChargeCredits:             defaults.MinChargeCredits,
+		SettingCompressionUserShareBPS:      defaults.CompressionUserShareBPS,
+		SettingCompressionMinNetGainCredits: defaults.CompressionMinNetGainCredits,
+		SettingSandboxMarkupBPS:             defaults.SandboxMarkupBPS,
+		SettingSandboxDiskFreeGiB:           defaults.SandboxDiskFreeGiB,
+		SettingMemoryCallPriceCredits:       defaults.MemoryCallPriceCredits,
+	}
+	for tool, price := range defaults.Tools {
+		out[SettingToolsPrefix+tool+SettingToolsSuffix] = price
+	}
+	rows, err := s.Pool.Query(ctx, `select key, value from billing.settings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	version := defaults.Version
+	for rows.Next() {
+		var key string
+		var raw []byte
+		if err := rows.Scan(&key, &raw); err != nil {
+			return nil, err
+		}
+		if key == SettingVersion {
+			decoded, err := jsonText(raw)
+			if err != nil {
+				return nil, fmt.Errorf("billing settings: invalid %s: %w", key, err)
+			}
+			if decoded != "" {
+				version = decoded
+			}
+			continue
+		}
+		var value any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return nil, fmt.Errorf("billing settings: invalid %s: %w", key, err)
+		}
+		out[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out["settings_version"] = version
+	return out, nil
+}

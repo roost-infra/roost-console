@@ -46,28 +46,34 @@ var ErrInvalidSandboxUsage = errors.New("invalid sandbox usage")
 // TotalCredits is optional: when omitted the total is the ceiling of the four
 // component credits. UnitPrices is an opaque JSON snapshot kept for display.
 type SandboxUsageInput struct {
-	OrgID             string          `json:"org_id"`
-	UserID            string          `json:"user_id"`
-	Product           string          `json:"product"`
-	SandboxID         string          `json:"sandbox_id"`
-	Provider          string          `json:"provider"`
-	ProviderSandboxID string          `json:"provider_sandbox_id"`
-	RunID             string          `json:"run_id"`
-	StartedAt         *time.Time      `json:"started_at"`
-	EndedAt           *time.Time      `json:"ended_at"`
-	BillableSeconds   int64           `json:"billable_seconds"`
-	CPUSeconds        int64           `json:"cpu_seconds"`
-	MemoryMiBSeconds  int64           `json:"memory_mib_seconds"`
-	DiskMiBSeconds    int64           `json:"disk_mib_seconds"`
-	GPUSeconds        int64           `json:"gpu_seconds"`
-	CPUCredits        float64         `json:"cpu_credits"`
-	MemoryCredits     float64         `json:"memory_credits"`
-	DiskCredits       float64         `json:"disk_credits"`
-	GPUCredits        float64         `json:"gpu_credits"`
-	TotalCredits      *int64          `json:"total_credits"`
-	UnitPrices        json.RawMessage `json:"unit_prices"`
-	Currency          string          `json:"currency"`
-	IdempotencyKey    string          `json:"idempotency_key"`
+	OrgID             string     `json:"org_id"`
+	UserID            string     `json:"user_id"`
+	Product           string     `json:"product"`
+	SandboxID         string     `json:"sandbox_id"`
+	Provider          string     `json:"provider"`
+	ProviderSandboxID string     `json:"provider_sandbox_id"`
+	RunID             string     `json:"run_id"`
+	StartedAt         *time.Time `json:"started_at"`
+	EndedAt           *time.Time `json:"ended_at"`
+	BillableSeconds   int64      `json:"billable_seconds"`
+	CPUSeconds        int64      `json:"cpu_seconds"`
+	MemoryMiBSeconds  int64      `json:"memory_mib_seconds"`
+	DiskMiBSeconds    int64      `json:"disk_mib_seconds"`
+	GPUSeconds        int64      `json:"gpu_seconds"`
+	// V2 resource gauges: products report the provisioned shape so the console
+	// can price it from settings. The legacy *Seconds/*Credits fields stay for
+	// the transition audit comparison only.
+	CPUCores       float64         `json:"cpu_cores"`
+	MemoryGB       float64         `json:"memory_gb"`
+	DiskGB         float64         `json:"disk_gb"`
+	CPUCredits     float64         `json:"cpu_credits"`
+	MemoryCredits  float64         `json:"memory_credits"`
+	DiskCredits    float64         `json:"disk_credits"`
+	GPUCredits     float64         `json:"gpu_credits"`
+	TotalCredits   *int64          `json:"total_credits"`
+	UnitPrices     json.RawMessage `json:"unit_prices"`
+	Currency       string          `json:"currency"`
+	IdempotencyKey string          `json:"idempotency_key"`
 }
 
 // SandboxUsage is a normalized, validated row ready to persist.
@@ -87,6 +93,9 @@ type SandboxUsage struct {
 	MemoryMiBSeconds  int64      `json:"memory_mib_seconds"`
 	DiskMiBSeconds    int64      `json:"disk_mib_seconds"`
 	GPUSeconds        int64      `json:"gpu_seconds"`
+	CPUCores          float64    `json:"cpu_cores,omitempty"`
+	MemoryGB          float64    `json:"memory_gb,omitempty"`
+	DiskGB            float64    `json:"disk_gb,omitempty"`
 	CPUCredits        float64    `json:"cpu_credits"`
 	MemoryCredits     float64    `json:"memory_credits"`
 	DiskCredits       float64    `json:"disk_credits"`
@@ -156,6 +165,9 @@ func NormalizeSandboxUsage(in SandboxUsageInput) (SandboxUsage, error) {
 		MemoryMiBSeconds: in.MemoryMiBSeconds,
 		DiskMiBSeconds:   in.DiskMiBSeconds,
 		GPUSeconds:       in.GPUSeconds,
+		CPUCores:         in.CPUCores,
+		MemoryGB:         in.MemoryGB,
+		DiskGB:           in.DiskGB,
 		CPUCredits:       in.CPUCredits,
 		MemoryCredits:    in.MemoryCredits,
 		DiskCredits:      in.DiskCredits,
@@ -225,6 +237,9 @@ func NormalizeSandboxUsage(in SandboxUsageInput) (SandboxUsage, error) {
 		name  string
 		value float64
 	}{
+		{"cpu_cores", u.CPUCores},
+		{"memory_gb", u.MemoryGB},
+		{"disk_gb", u.DiskGB},
 		{"cpu_credits", u.CPUCredits},
 		{"memory_credits", u.MemoryCredits},
 		{"disk_credits", u.DiskCredits},
@@ -296,17 +311,30 @@ func roundSandboxCredits(value float64) float64 {
 // an invented rate.
 func PriceSandboxUsage(u SandboxUsage, settings Settings) (SandboxUsage, error) {
 	hours := float64(u.BillableSeconds) / 3600
-	if hours <= 0 {
+	if hours <= 0 && u.CPUCores == 0 && u.MemoryGB == 0 && u.DiskGB == 0 {
+		// Legacy reports may omit wall time: derive it from the measured
+		// component seconds.
 		hours = math.Max(
 			math.Max(float64(u.CPUSeconds), float64(u.MemoryMiBSeconds)/1024),
 			float64(u.DiskMiBSeconds)/1024,
 		) / 3600
 	}
-	cpuUSD := float64(u.CPUSeconds) / 3600 * sandboxCPUUSDPerCoreHour
-	memoryUSD := float64(u.MemoryMiBSeconds) / 1024 / 3600 * sandboxMemoryUSDPerGBHour
-	diskGBHours := float64(u.DiskMiBSeconds) / 1024 / 3600
-	freeGBHours := float64(settings.SandboxDiskFreeGiB) * hours
-	diskUSD := math.Max(0, diskGBHours-freeGBHours) * sandboxDiskUSDPerGBHour
+	var cpuUSD, memoryUSD, diskUSD float64
+	if u.CPUCores > 0 || u.MemoryGB > 0 || u.DiskGB > 0 {
+		// dslpha's V2 report: provisioned shape × billable hours.
+		if hours <= 0 {
+			return u, invalidSandbox("billable_seconds is required with cpu_cores/memory_gb/disk_gb")
+		}
+		cpuUSD = u.CPUCores * hours * sandboxCPUUSDPerCoreHour
+		memoryUSD = u.MemoryGB * hours * sandboxMemoryUSDPerGBHour
+		diskUSD = math.Max(0, u.DiskGB-float64(settings.SandboxDiskFreeGiB)) * hours * sandboxDiskUSDPerGBHour
+	} else {
+		cpuUSD = float64(u.CPUSeconds) / 3600 * sandboxCPUUSDPerCoreHour
+		memoryUSD = float64(u.MemoryMiBSeconds) / 1024 / 3600 * sandboxMemoryUSDPerGBHour
+		diskGBHours := float64(u.DiskMiBSeconds) / 1024 / 3600
+		freeGBHours := float64(settings.SandboxDiskFreeGiB) * hours
+		diskUSD = math.Max(0, diskGBHours-freeGBHours) * sandboxDiskUSDPerGBHour
+	}
 	totalUSD := cpuUSD + memoryUSD + diskUSD
 	markup := float64(settings.SandboxMarkupBPS) / 10000
 	fx := float64(settings.FXUSDToCredits)
@@ -399,6 +427,9 @@ func (s *Store) RecordSandboxUsage(ctx context.Context, in SandboxUsageInput) (S
 		"reported_memory_credits": in.MemoryCredits,
 		"reported_disk_credits":   in.DiskCredits,
 		"reported_gpu_credits":    in.GPUCredits,
+		"reported_cpu_cores":      in.CPUCores,
+		"reported_memory_gb":      in.MemoryGB,
+		"reported_disk_gb":        in.DiskGB,
 		"reported_unit_prices":    json.RawMessage(in.UnitPrices),
 	}
 	u, err = PriceSandboxUsage(u, settings)

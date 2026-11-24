@@ -436,6 +436,10 @@ type SettleRunInput struct {
 	ModelUsage    []ModelUsage
 	SpentUSD      *float64
 	Byok          bool
+	// SurchargeMinor is an optional product-reported infrastructure/tool fee
+	// in minor units. It is added after the token amount is priced and
+	// persisted as a tool charge (tool="surcharge", unit="credit") for audit.
+	SurchargeMinor int64
 }
 
 // SettleRunResult reports what a turn settlement booked.
@@ -473,6 +477,9 @@ func (s *Store) SettleByRunV2(ctx context.Context, in SettleRunInput) (SettleRun
 	}
 	if in.SpentUSD != nil && (*in.SpentUSD < 0 || math.IsNaN(*in.SpentUSD) || math.IsInf(*in.SpentUSD, 0)) {
 		return SettleRunResult{}, fmt.Errorf("%w: spent_usd must be >= 0", ErrInvalidPricing)
+	}
+	if in.SurchargeMinor < 0 {
+		return SettleRunResult{}, fmt.Errorf("%w: surcharge_minor must be >= 0", ErrInvalidPricing)
 	}
 	usages, err := NormalizeModelUsage(in.ModelUsage)
 	if err != nil {
@@ -545,7 +552,8 @@ func (s *Store) SettleByRunV2(ctx context.Context, in SettleRunInput) (SettleRun
 	unknownModel := ""
 	switch {
 	case in.Byok:
-		// BYOK records usage only; there is nothing to charge.
+		// BYOK records model usage without charging it; an explicit infra/tool
+		// surcharge is still billed because it is not model spend.
 	case len(usages) > 0 && bookLoaded:
 		var total int64
 		for _, usage := range usages {
@@ -586,6 +594,12 @@ func (s *Store) SettleByRunV2(ctx context.Context, in SettleRunInput) (SettleRun
 	case in.ActualCredits != nil:
 		credits = *in.ActualCredits
 		amountMinor = credits * MinorPerCredit
+	}
+	// The surcharge is added to the priced minor amount before rounding to
+	// credits, so charged_credits includes it.
+	if in.SurchargeMinor > 0 {
+		amountMinor += in.SurchargeMinor
+		credits = CreditsFromMinor(amountMinor)
 	}
 
 	var balance, walletReserved int64
@@ -628,6 +642,19 @@ func (s *Store) SettleByRunV2(ctx context.Context, in SettleRunInput) (SettleRun
 			values ($1,$2,$3,'usage',$4,$5,nullif($6,''),$7)
 			on conflict (idempotency_key) do nothing`,
 			in.OrgID, in.Product, -charged, leaseID, "lease:"+leaseID, priceVersion, settingsVersion); err != nil {
+			return SettleRunResult{}, err
+		}
+	}
+	if in.SurchargeMinor > 0 {
+		surcharge := []ToolCharge{{
+			Tool:           "surcharge",
+			Unit:           "credit",
+			Quantity:       1,
+			UnitPriceMicro: in.SurchargeMinor * 1000,
+			AmountMinor:    in.SurchargeMinor,
+			Status:         ToolChargeStatusSucceeded,
+		}}
+		if err := insertToolCharges(ctx, tx, in.OrgID, in.RunRef, leaseID+":surcharge", leaseID, surcharge); err != nil {
 			return SettleRunResult{}, err
 		}
 	}

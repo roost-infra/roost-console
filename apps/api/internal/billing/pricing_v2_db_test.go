@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -626,5 +627,104 @@ func TestSettleByRunV2DBPeakUsesLeaseCreatedAt(t *testing.T) {
 	}
 	if result.PriceVersion != peakBookVersion {
 		t.Fatalf("price version=%q", result.PriceVersion)
+	}
+}
+
+// TestSettleByRunV2DBSurcharge proves the optional infra/tool surcharge is
+// added after token pricing, included in charged_credits, and persisted as a
+// tool charge row for audit.
+func TestSettleByRunV2DBSurcharge(t *testing.T) {
+	pool := pricingV2TestPool(t)
+	seedPricingV2Settings(t, pool)
+	seedPricingV2Book(t, pool)
+	store := New(pool)
+	ctx := context.Background()
+
+	orgID := newSandboxTestOrg(t, pool, 1_000)
+	runRef := "run-" + uuid.NewString()
+	leaseID := insertDSAlphaLease(t, pool, orgID, runRef, 200, "active")
+	result, err := store.SettleByRunV2(ctx, SettleRunInput{
+		OrgID: orgID, Product: "dsalpha", RunRef: runRef,
+		ModelUsage:     []ModelUsage{{Model: "claude-sonnet-5-5", Input: 150_000, Output: 2_000, Calls: 1}},
+		SurchargeMinor: 5_000,
+	})
+	if err != nil {
+		t.Fatalf("settle by run: %v", err)
+	}
+	// 179595 token minor + 5000 surcharge = 184595 -> 185 credits.
+	if result.ChargedCredits != 185 || result.AmountMinor != 184_595 {
+		t.Fatalf("result=%+v want 185 credits / 184595 minor", result)
+	}
+	var (
+		tool, unit, status string
+		amountMinor        int64
+	)
+	if err := pool.QueryRow(ctx, `
+		select tool,unit,amount_minor,status from billing.usage_tool_charges where lease_id=$1`, leaseID).
+		Scan(&tool, &unit, &amountMinor, &status); err != nil {
+		t.Fatalf("read surcharge tool row: %v", err)
+	}
+	if tool != "surcharge" || unit != "credit" || amountMinor != 5_000 || status != "succeeded" {
+		t.Fatalf("surcharge row tool=%q unit=%q amount=%d status=%q", tool, unit, amountMinor, status)
+	}
+	var balance int64
+	if err := pool.QueryRow(ctx, `select balance_credits from billing.wallets where org_id=$1`, orgID).Scan(&balance); err != nil {
+		t.Fatalf("read wallet: %v", err)
+	}
+	if balance != 815 {
+		t.Fatalf("balance=%d want 815", balance)
+	}
+
+	// BYOK records model usage without charging it, but the infra surcharge is
+	// still billed.
+	byokOrg := newSandboxTestOrg(t, pool, 1_000)
+	byokRun := "run-" + uuid.NewString()
+	insertDSAlphaLease(t, pool, byokOrg, byokRun, 200, "active")
+	byok, err := store.SettleByRunV2(ctx, SettleRunInput{
+		OrgID: byokOrg, Product: "dsalpha", RunRef: byokRun, Byok: true,
+		ModelUsage:     []ModelUsage{{Model: "claude-sonnet-5-5", Input: 150_000, Output: 2_000}},
+		SurchargeMinor: 5_000,
+	})
+	if err != nil {
+		t.Fatalf("byok settle: %v", err)
+	}
+	if byok.ChargedCredits != 5 || byok.AmountMinor != 5_000 {
+		t.Fatalf("byok result=%+v want 5 credits / 5000 minor", byok)
+	}
+
+	// A negative surcharge is rejected before booking.
+	if _, err := store.SettleByRunV2(ctx, SettleRunInput{
+		OrgID: orgID, Product: "dsalpha", RunRef: "run-" + uuid.NewString(),
+		SurchargeMinor: -1,
+	}); !errors.Is(err, ErrInvalidPricing) {
+		t.Fatalf("negative surcharge err=%v want ErrInvalidPricing", err)
+	}
+}
+
+// TestSettingsFlatDB checks the service-facing flat settings map, including the
+// settings_version key and numeric scalar values.
+func TestSettingsFlatDB(t *testing.T) {
+	pool := pricingV2TestPool(t)
+	seedPricingV2Settings(t, pool)
+	store := New(pool)
+
+	flat, err := store.SettingsFlat(context.Background())
+	if err != nil {
+		t.Fatalf("settings flat: %v", err)
+	}
+	if flat["settings_version"] != testSettingsVersion {
+		t.Fatalf("settings_version=%v want %q", flat["settings_version"], testSettingsVersion)
+	}
+	if fmt.Sprint(flat["fx.usd_to_credits"]) != "720" {
+		t.Fatalf("fx.usd_to_credits=%v", flat["fx.usd_to_credits"])
+	}
+	if fmt.Sprint(flat["sandbox.markup_bps"]) != "13000" {
+		t.Fatalf("sandbox.markup_bps=%v", flat["sandbox.markup_bps"])
+	}
+	if fmt.Sprint(flat["compression.user_share_bps"]) != "2500" {
+		t.Fatalf("compression.user_share_bps=%v", flat["compression.user_share_bps"])
+	}
+	if _, ok := flat["settings.version"]; ok {
+		t.Fatalf("flat map should expose settings_version, not settings.version: %v", flat)
 	}
 }

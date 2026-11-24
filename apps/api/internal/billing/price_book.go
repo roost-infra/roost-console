@@ -105,11 +105,25 @@ type PriceBook struct {
 	Hash            string
 }
 
-// Model returns the schedule for one model name.
+// normalizeModelName folds the dot/hyphen separator differences between a
+// product manifest (`claude-sonnet-5-5`) and the price book
+// (`claude-sonnet-5.5`) so a naming mismatch cannot surface as unknown_model.
+func normalizeModelName(name string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), ".", "-")
+}
+
+// Model returns the schedule for one model name. An exact match wins; a
+// dot↔hyphen-equivalent match is the fallback (case-insensitively).
 func (b PriceBook) Model(name string) (PriceModel, bool) {
 	name = strings.TrimSpace(name)
 	for _, m := range b.Models {
 		if m.Model == name {
+			return m, true
+		}
+	}
+	normalized := normalizeModelName(name)
+	for _, m := range b.Models {
+		if normalizeModelName(m.Model) == normalized {
 			return m, true
 		}
 	}

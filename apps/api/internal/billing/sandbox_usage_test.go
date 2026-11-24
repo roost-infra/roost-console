@@ -252,3 +252,50 @@ func TestPriceSandboxUsageRejectsEmptyReport(t *testing.T) {
 		t.Fatalf("err=%v want ErrInvalidSandboxUsage", err)
 	}
 }
+
+// TestPriceSandboxUsageFromResourceGauges prices dslpha's provisioned shape
+// (cpu_cores/memory_gb/disk_gb) from settings and ignores the legacy component
+// seconds, which stay for the audit snapshot only.
+func TestPriceSandboxUsageFromResourceGauges(t *testing.T) {
+	in := validSandboxInput()
+	in.BillableSeconds = 3600
+	in.CPUCores, in.MemoryGB, in.DiskGB = 2, 4, 16
+	// Deliberately misleading legacy fields: they must not move the price.
+	in.CPUSeconds, in.MemoryMiBSeconds, in.DiskMiBSeconds = 3600*10, 3600*1024*10, 3600*256*10
+	in.CPUCredits, in.MemoryCredits, in.DiskCredits, in.GPUCredits = 100, 100, 100, 100
+	u, err := NormalizeSandboxUsage(in)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	priced, err := PriceSandboxUsage(u, DefaultSettings())
+	if err != nil {
+		t.Fatalf("price: %v", err)
+	}
+	// cpu 2×0.0504 + mem 4×0.0162 + disk (16−5)×0.000108 = 0.166788 USD
+	// × 1.3 × 720 = 156.11 credits -> 157.
+	if priced.TotalCredits != 157 || priced.CreditsMinor != 157000 {
+		t.Fatalf("total=%d minor=%d want 157/157000", priced.TotalCredits, priced.CreditsMinor)
+	}
+	if priced.CPUCredits != 94.3488 || priced.MemoryCredits != 60.6528 {
+		t.Fatalf("cpu=%v memory=%v", priced.CPUCredits, priced.MemoryCredits)
+	}
+	if priced.DiskCredits != 1.112 {
+		t.Fatalf("disk=%v", priced.DiskCredits)
+	}
+}
+
+func TestPriceSandboxUsageResourceGaugesNeedWallTime(t *testing.T) {
+	in := validSandboxInput()
+	in.BillableSeconds = 0
+	in.CPUCores = 2
+	in.CPUSeconds = 0
+	in.MemoryMiBSeconds = 0
+	in.DiskMiBSeconds = 0
+	u, err := NormalizeSandboxUsage(in)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if _, err := PriceSandboxUsage(u, DefaultSettings()); !errors.Is(err, ErrInvalidSandboxUsage) {
+		t.Fatalf("err=%v want ErrInvalidSandboxUsage", err)
+	}
+}

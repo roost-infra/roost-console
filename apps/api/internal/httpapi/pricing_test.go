@@ -286,7 +286,65 @@ func TestInternalPricingBookScope(t *testing.T) {
 			t.Errorf("service %q is not allowed to read the internal price book", service)
 		}
 	}
+	for _, service := range []string{"dslpha", "market", "root"} {
+		if !serviceAllows(service, http.MethodGet, "/internal/v1/billing/settings") {
+			t.Errorf("service %q is not allowed to read billing settings", service)
+		}
+	}
 	if serviceAllows("causal", http.MethodGet, "/internal/v1/pricing/book") {
 		t.Error("causal service should not read the price book")
+	}
+}
+
+type fakeSettingsProvider struct {
+	values map[string]any
+	err    error
+}
+
+func (f *fakeSettingsProvider) SettingsFlat(context.Context) (map[string]any, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.values, nil
+}
+
+func TestInternalBillingSettings(t *testing.T) {
+	store := &fakeSettingsProvider{values: map[string]any{
+		"settings_version":           "2026-11-25.1",
+		"fx.usd_to_credits":          int64(720),
+		"sandbox.markup_bps":         int64(13000),
+		"compression.user_share_bps": int64(2500),
+	}}
+	s := pricingTestServer(&fakePriceBookStore{book: testPricingBook()})
+	s.settings = store
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, signedPricingRequest("dslpha", "/internal/v1/billing/settings"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodePricingBody(t, rec)
+	if body["settings_version"] != "2026-11-25.1" ||
+		body["fx.usd_to_credits"] != float64(720) ||
+		body["sandbox.markup_bps"] != float64(13000) ||
+		body["compression.user_share_bps"] != float64(2500) {
+		t.Fatalf("body=%v", body)
+	}
+}
+
+func TestInternalBillingSettingsAuthAndScope(t *testing.T) {
+	store := &fakeSettingsProvider{values: map[string]any{"settings_version": "v"}}
+	s := pricingTestServer(&fakePriceBookStore{book: testPricingBook()})
+	s.settings = store
+	rec := callPricing(t, s, "/internal/v1/billing/settings", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unsigned status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, service := range []string{"dslpha", "market"} {
+		if !serviceAllows(service, http.MethodGet, "/internal/v1/billing/settings") {
+			t.Errorf("service %q cannot read billing settings", service)
+		}
+	}
+	if serviceAllows("causal", http.MethodGet, "/internal/v1/billing/settings") {
+		t.Error("causal service should not read billing settings")
 	}
 }

@@ -333,3 +333,30 @@ func TestSettingsDefaultsAndOverrides(t *testing.T) {
 		t.Fatal("invalid settings value accepted")
 	}
 }
+
+func TestModelNameDotHyphenEquivalent(t *testing.T) {
+	book := sonnetBook()
+	for _, name := range []string{"claude-sonnet-5.5", "claude-sonnet-5-5", "CLAUDE-SONNET-5-5", " claude-sonnet-5.5 "} {
+		charge, err := book.PriceCharge(name, TokenUsage{Input: 150_000, Output: 2_000}, time.Time{}, nil, DefaultSettings(), nil)
+		if err != nil {
+			t.Fatalf("model %q: %v", name, err)
+		}
+		if charge.AmountMinor != 179_595 {
+			t.Fatalf("model %q amount=%d", name, charge.AmountMinor)
+		}
+	}
+	hyphenBook := PriceBook{Version: "hyphen", Models: []PriceModel{{
+		Model: "claude-sonnet-5-6",
+		Tiers: []PriceTier{{Prices: map[string]ComponentPrice{
+			ComponentInput: {RetailMinorPerMillion: 1_000_000},
+		}}},
+	}}}
+	hyphenBook.Finalize()
+	charge, err := hyphenBook.PriceCharge("claude-sonnet-5.6", TokenUsage{Input: 1_000}, time.Time{}, nil, DefaultSettings(), nil)
+	if err != nil {
+		t.Fatalf("dot query against hyphen book: %v", err)
+	}
+	if charge.AmountMinor != 1_000 {
+		t.Fatalf("amount=%d", charge.AmountMinor)
+	}
+}

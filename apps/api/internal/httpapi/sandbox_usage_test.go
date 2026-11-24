@@ -195,3 +195,28 @@ func TestSandboxUsageRouteWithoutStoreReportsUnavailable(t *testing.T) {
 		t.Fatalf("status=%d body=%s", httpRec.Code, httpRec.Body.String())
 	}
 }
+
+func TestSandboxUsageEndpointResourceGauges(t *testing.T) {
+	rec := &fakeSandboxUsageRecorder{result: billing.SandboxChargeResult{
+		Usage:          billing.SandboxUsage{ID: 9, TotalCredits: 157, CreditsMinor: 157000},
+		ChargedCredits: 157,
+		BalanceCredits: 843,
+	}}
+	body := []byte(`{
+		"org_id":"4d1e4d5e-8f0f-4a3a-9a3e-2b1c0d9e8f7a","product":"dsalpha","sandbox_id":"sbx-2",
+		"billable_seconds":3600,"cpu_cores":2,"memory_gb":4,"disk_gb":16,
+		"cpu_seconds":3600,"memory_mib_seconds":1048576,"disk_mib_seconds":1024,
+		"idempotency_key":"sbx-resource-1"
+	}`)
+	httpRec := httptest.NewRecorder()
+	sandboxHTTPTestServer(rec).Handler().ServeHTTP(httpRec, signedSandboxRequest("dslpha", body))
+	if httpRec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", httpRec.Code, httpRec.Body.String())
+	}
+	if len(rec.calls) != 1 {
+		t.Fatalf("calls=%+v", rec.calls)
+	}
+	if got := rec.calls[0]; got.CPUCores != 2 || got.MemoryGB != 4 || got.DiskGB != 16 || got.BillableSeconds != 3600 {
+		t.Fatalf("resource gauges not forwarded: %+v", got)
+	}
+}

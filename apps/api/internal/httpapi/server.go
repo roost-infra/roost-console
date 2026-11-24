@@ -68,6 +68,7 @@ type Server struct {
 	sandboxUsage   sandboxUsageRecorder
 	billingDetails billingDetailsStore
 	pricing        priceBookStore
+	settings       settingsProvider
 	referrals      referralBilling
 	adminGift      adminGiftBilling
 	adminReferral  adminReferralBilling
@@ -107,6 +108,7 @@ func New(cfg config.Config, store *billing.Store, verifier *auth.Verifier, pay *
 		s.sandboxUsage = store
 		s.billingDetails = store
 		s.pricing = store
+		s.settings = store
 		s.referrals = store
 		s.adminGift = store
 		s.adminReferral = store
@@ -177,6 +179,7 @@ func (s *Server) Handler() http.Handler {
 	// Relay (API marketplace) platform contract.
 	mux.HandleFunc("GET /v1/pricing/book", s.publicPricingBook)
 	mux.HandleFunc("GET /internal/v1/pricing/book", s.withService(s.internalPricingBook))
+	mux.HandleFunc("GET /internal/v1/billing/settings", s.withService(s.internalBillingSettings))
 	mux.HandleFunc("POST /v1/relay/api-keys/introspect", s.withRelayService(s.relayIntrospect))
 	mux.HandleFunc("POST /v1/relay/reservations", s.withRelayService(s.relayReserve))
 	mux.HandleFunc("POST /v1/relay/reservations/{reservationID}/settle", s.withRelayService(s.relaySettle))
@@ -445,6 +448,7 @@ var serviceScopes = map[string][]string{
 		"/internal/v1/usage/leases",
 		"/internal/v1/usage/sandbox",
 		"/internal/v1/pricing/book",
+		"/internal/v1/billing/settings",
 	},
 	"dslpha": {
 		"/api/auth/validate",
@@ -453,6 +457,7 @@ var serviceScopes = map[string][]string{
 		"/internal/v1/usage/charge",
 		"/internal/v1/usage/sandbox",
 		"/internal/v1/pricing/book",
+		"/internal/v1/billing/settings",
 	},
 	"causal":      {"/internal/v1/usage/charge"},
 	"causal-sync": {"/internal/v1/products/causal-memory/tokens"},
@@ -1253,13 +1258,14 @@ func (s *Server) compatAcquire(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) compatRelease(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		UserID       string               `json:"user_id"`
-		RunRef       string               `json:"run_ref"`
-		Generation   int64                `json:"generation"`
-		Byok         bool                 `json:"byok"`
-		ModelUsage   []billing.ModelUsage `json:"model_usage"`
-		SpentUSD     *float64             `json:"spent_usd"`
-		SpentCredits *float64             `json:"spent_credits"`
+		UserID         string               `json:"user_id"`
+		RunRef         string               `json:"run_ref"`
+		Generation     int64                `json:"generation"`
+		Byok           bool                 `json:"byok"`
+		ModelUsage     []billing.ModelUsage `json:"model_usage"`
+		SpentUSD       *float64             `json:"spent_usd"`
+		SpentCredits   *float64             `json:"spent_credits"`
+		SurchargeMinor int64                `json:"surcharge_minor"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RunRef == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "run_ref is required")
@@ -1271,14 +1277,15 @@ func (s *Server) compatRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hasLegacySpend := req.SpentCredits != nil && *req.SpentCredits > 0
-	if req.Byok || len(req.ModelUsage) > 0 || req.SpentUSD != nil || hasLegacySpend {
+	if req.Byok || len(req.ModelUsage) > 0 || req.SpentUSD != nil || hasLegacySpend || req.SurchargeMinor > 0 {
 		in := billing.SettleRunInput{
-			OrgID:      org.ID,
-			Product:    "dsalpha",
-			RunRef:     req.RunRef,
-			ModelUsage: req.ModelUsage,
-			SpentUSD:   req.SpentUSD,
-			Byok:       req.Byok,
+			OrgID:          org.ID,
+			Product:        "dsalpha",
+			RunRef:         req.RunRef,
+			ModelUsage:     req.ModelUsage,
+			SpentUSD:       req.SpentUSD,
+			Byok:           req.Byok,
+			SurchargeMinor: req.SurchargeMinor,
 		}
 		if hasLegacySpend {
 			credits := int64(math.Ceil(*req.SpentCredits))
@@ -1297,7 +1304,10 @@ func (s *Server) compatRelease(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"released":         result.Settled,
+			// A retry after the lease already settled is a successful no-op for
+			// the caller, matching the legacy release contract.
+			"released":         true,
+			"settled":          result.Settled,
 			"charged_credits":  result.ChargedCredits,
 			"amount_minor":     result.AmountMinor,
 			"price_version":    result.PriceVersion,
