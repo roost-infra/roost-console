@@ -76,6 +76,7 @@ deepseek-alpha.com        dslpha（现有）
 
 ```text
 POST https://api.roostbots.com/v1/payments/xunhupay/notify
+POST https://api.roostbots.com/v1/payments/epusdt/notify
 ```
 
 ---

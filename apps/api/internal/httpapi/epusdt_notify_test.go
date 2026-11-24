@@ -122,6 +122,22 @@ func TestEPUSDTNotifyFulfillsPaidOrder(t *testing.T) {
 	}
 }
 
+func TestEPUSDTNotifyAcceptsOrphanedCheckout(t *testing.T) {
+	// The gateway created a checkout but the trade id never reached the row
+	// (create timed out, attach failed). The payment is still real.
+	order := epusdtOrder()
+	order.ProviderOrderID = ""
+	store := &fakePaidOrders{order: order}
+	body := epusdtCallback(t, epusdtSecret, nil)
+	rec := postEPUSDTNotify(epusdtServer(epusdtConfig(), store).Handler(), body)
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if len(store.calls) != 1 || store.calls[0].tradeNo != "epusdt_GW1" {
+		t.Fatalf("calls=%+v", store.calls)
+	}
+}
+
 func TestEPUSDTNotifyRejectsWithoutFulfilling(t *testing.T) {
 	xunhuOrder := epusdtOrder()
 	xunhuOrder.Provider = payment.ProviderXunhuPay
