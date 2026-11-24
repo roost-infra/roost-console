@@ -87,23 +87,50 @@ func TestPriceBookSeedGolden(t *testing.T) {
 	book.Finalize()
 
 	settings := DefaultSettings()
+	// The seed is business data, not the contract fixture: the expected amount is
+	// derived from whatever retail the seed carries, so changing prices does not
+	// make this test lie. The contract's fixed golden numbers live in the pricing
+	// unit tests (pricing_test.go) against a synthetic book.
+	entry, ok := book.Model("claude-sonnet-5.5")
+	if !ok {
+		t.Fatal("seed is missing claude-sonnet-5.5")
+	}
+	var seedInput, seedOutput int64
+	for _, tier := range entry.Tiers {
+		if tier.MaxInput == 0 {
+			seedInput = tier.Price(ComponentInput).RetailMinorPerMillion
+			seedOutput = tier.Price(ComponentOutput).RetailMinorPerMillion
+		}
+	}
+	if seedInput <= 0 || seedOutput <= 0 {
+		t.Fatalf("seed sonnet retail = %d / %d", seedInput, seedOutput)
+	}
+	wantPlain := mulDivRoundHalfAway(150_000, seedInput, MinorPerMillion) +
+		mulDivRoundHalfAway(2_000, seedOutput, MinorPerMillion)
 	plain, err := book.PriceCharge("claude-sonnet-5.5", TokenUsage{Input: 150_000, Output: 2_000}, time.Time{}, nil, settings, nil)
 	if err != nil {
 		t.Fatalf("seed plain price: %v", err)
 	}
-	if plain.AmountMinor != 179_595 || plain.AmountCredits != 180 {
-		t.Fatalf("seed plain = %d minor / %d credits, want 179595 / 180", plain.AmountMinor, plain.AmountCredits)
+	if plain.AmountMinor != wantPlain || plain.AmountCredits != CreditsFromMinor(wantPlain) {
+		t.Fatalf("seed plain = %d minor / %d credits, want %d / %d",
+			plain.AmountMinor, plain.AmountCredits, wantPlain, CreditsFromMinor(wantPlain))
 	}
+	saved := int64(153_000 - 90_000)
+	share := saved * settings.CompressionUserShareBPS / PeakBaseBPS
+	wantChargeInput := int64(153_000) - share
+	wantCompressed := mulDivRoundHalfAway(wantChargeInput, seedInput, MinorPerMillion) +
+		mulDivRoundHalfAway(2_000, seedOutput, MinorPerMillion)
 	compressed, err := book.PriceCharge("claude-sonnet-5.5", TokenUsage{Input: 150_000, Output: 2_000}, time.Time{}, &CompressionBasis{
 		Mode: "original", BeforeInputTokens: 150_000, AfterInputTokens: 90_000, SummaryCostMinor: 20,
 	}, settings, nil)
 	if err != nil {
 		t.Fatalf("seed compressed price: %v", err)
 	}
-	if compressed.AmountMinor != 165_283 || compressed.AmountCredits != 166 {
-		t.Fatalf("seed compressed = %d minor / %d credits, want 165283 / 166", compressed.AmountMinor, compressed.AmountCredits)
+	if compressed.AmountMinor != wantCompressed || compressed.AmountCredits != CreditsFromMinor(wantCompressed) {
+		t.Fatalf("seed compressed = %d minor / %d credits, want %d / %d",
+			compressed.AmountMinor, compressed.AmountCredits, wantCompressed, CreditsFromMinor(wantCompressed))
 	}
-	if compressed.Compression == nil || compressed.Compression.SavedTokens != 63_000 || compressed.Compression.UserShareTokens != 15_750 {
-		t.Fatalf("seed compression=%+v", compressed.Compression)
+	if compressed.Compression == nil || compressed.Compression.SavedTokens != saved || compressed.Compression.UserShareTokens != share {
+		t.Fatalf("seed compression=%+v want saved=%d share=%d", compressed.Compression, saved, share)
 	}
 }
