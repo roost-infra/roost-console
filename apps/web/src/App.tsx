@@ -1625,7 +1625,7 @@ function RelayKeys({ token, orgId }: { token: string; orgId: string }) {
         {error && (
           <p className="form-error">
             {error}
-            <button className="link-btn" type="button" onClick={() => void load()} disabled={!!busy}>重试</button>
+            <button className="link-btn" type="button" onClick={() => void load()} disabled={!!busy}>重新加载列表</button>
           </p>
         )}
         <div className="table table--keys">
