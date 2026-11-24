@@ -72,6 +72,7 @@ type Order struct {
 	AmountCents     int        `json:"amount_cents"`
 	Credits         int64      `json:"credits"`
 	Status          string     `json:"status"`
+	Provider        string     `json:"provider"`
 	QRURL           string     `json:"qr_url,omitempty"`
 	PayURL          string     `json:"pay_url,omitempty"`
 	ProviderOrderID string     `json:"-"`

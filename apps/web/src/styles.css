@@ -258,6 +258,12 @@ a.product-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lif
 .qr { display: block; width: 220px; height: 220px; object-fit: contain; margin: 8px auto 18px; border-radius: 12px; background: #fff; padding: 8px; }
 .dev-note { padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-ink); font-size: 13px; line-height: 1.6; }
 .modal__actions { margin-top: 18px; }
+.pay-note { margin: 0 0 4px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.6; }
+.pay-methods { display: grid; gap: 10px; margin-top: 20px; }
+.pay-method { display: grid; gap: 4px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, .6); color: var(--ink); text-align: left; cursor: pointer; }
+.pay-method:hover, .pay-method:focus-visible { border-color: var(--ink); }
+.pay-method strong { font-size: 14px; font-weight: 600; }
+.pay-method span { font-size: 12px; line-height: 1.6; color: var(--muted); }
 .pay-done { text-align: center; padding: 10px 0 2px; }
 .pay-done__mark { display: grid; place-items: center; width: 54px; height: 54px; margin: 0 auto 14px; border-radius: 50%; background: var(--green-soft); color: var(--green-ink); font-size: 24px; }
 .pay-done p { margin: 0 0 20px; color: var(--muted); font-size: 13px; line-height: 1.7; }

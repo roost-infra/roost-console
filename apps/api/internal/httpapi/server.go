@@ -36,6 +36,13 @@ type orderAdmin interface {
 	Fulfill(ctx context.Context, orderID, providerTradeNo string, amountCents int, raw []byte) error
 }
 
+// paidOrders is the slice of the billing store a provider callback needs: find
+// the order a notification names and apply its effect once.
+type paidOrders interface {
+	OrderByTradeNo(ctx context.Context, tradeNo string) (billing.Order, error)
+	Fulfill(ctx context.Context, orderID, providerTradeNo string, amountCents int, raw []byte) error
+}
+
 // orgMembership is the authorization slice of the billing store used by
 // requireOrg. It is an interface so handler tests do not need Postgres.
 type orgMembership interface {
@@ -73,6 +80,9 @@ type Server struct {
 	adminGift      adminGiftBilling
 	adminReferral  adminReferralBilling
 	orderAdmin     orderAdmin
+	paidOrders     paidOrders
+	// epusdt is the optional crypto gateway; nil or unconfigured disables it.
+	epusdt *payment.EPUSDT
 
 	// 60-second in-process cache of the current price book. An explicit `at`
 	// query bypasses it.
@@ -91,12 +101,12 @@ type ctxKey string
 
 const userKey ctxKey = "user"
 
-func New(cfg config.Config, store *billing.Store, verifier *auth.Verifier, pay *payment.Client, log *slog.Logger) *Server {
+func New(cfg config.Config, store *billing.Store, verifier *auth.Verifier, pay *payment.Client, epusdt *payment.EPUSDT, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
 	signer, _ := oidc.NewSigner()
-	s := &Server{cfg: cfg, store: store, verifier: verifier, pay: pay, log: log, signer: signer}
+	s := &Server{cfg: cfg, store: store, verifier: verifier, pay: pay, epusdt: epusdt, log: log, signer: signer}
 	s.signingPrefixes = signingPathPrefixes(cfg.PublicBaseURL)
 	if store != nil {
 		s.membership = store
@@ -113,6 +123,7 @@ func New(cfg config.Config, store *billing.Store, verifier *auth.Verifier, pay *
 		s.adminGift = store
 		s.adminReferral = store
 		s.orderAdmin = store
+		s.paidOrders = store
 	}
 	return s
 }
@@ -166,6 +177,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/billing/orders", s.withUser(s.createOrder))
 	mux.HandleFunc("GET /v1/billing/orders/{orderID}", s.withUser(s.getOrder))
 	mux.HandleFunc("POST /v1/payments/xunhupay/notify", s.rateLimit("payment_notify", s.cfg.RatePaymentNotify, ipKey, s.xunhuNotify))
+	mux.HandleFunc("POST /v1/payments/epusdt/notify", s.rateLimit("payment_notify", s.cfg.RatePaymentNotify, ipKey, s.epusdtNotify))
 	mux.HandleFunc("POST /v1/dev/orders/{orderID}/pay", s.withUser(s.devPay))
 	mux.HandleFunc("GET /.well-known/openid-configuration", s.oidcDiscovery)
 	mux.HandleFunc("GET /oauth/authorize", s.oidcAuthorizeRedirect)
@@ -736,7 +748,20 @@ func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"plans": plans})
+	writeJSON(w, http.StatusOK, map[string]any{"plans": plans, "payment_methods": s.paymentMethods(userFrom(r))})
+}
+
+// paymentMethods lists the checkout providers this account may choose, default
+// first. The web client only offers a choice when there is more than one.
+func (s *Server) paymentMethods(u *auth.User) []string {
+	methods := make([]string, 0, 2)
+	if s.cfg.PaymentConfigured() || s.cfg.Environment == "development" {
+		methods = append(methods, payment.ProviderXunhuPay)
+	}
+	if u != nil && s.epusdt != nil && s.cfg.EPUSDTAllowed(u.Email) {
+		methods = append(methods, payment.ProviderEPUSDT)
+	}
+	return methods
 }
 
 func (s *Server) billingView(w http.ResponseWriter, r *http.Request) {
@@ -772,6 +797,9 @@ type createOrderRequest struct {
 	// AmountCents is only read for the custom top-up SKU; every other SKU is
 	// priced server-side by Quote and ignores it.
 	AmountCents int64 `json:"amount_cents"`
+	// Provider selects the checkout: "" or "xunhupay" (WeChat/Alipay), or
+	// "epusdt" (crypto) when that gateway is enabled for the account.
+	Provider string `json:"provider"`
 }
 
 type orderResponse struct {
@@ -790,6 +818,12 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	var req createOrderRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil || req.SKU == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "sku is required")
+		return
+	}
+	provider, ok := s.checkoutProvider(req.Provider, u.Email)
+	if !ok {
+		// Refused before an order row exists.
+		writeError(w, http.StatusBadRequest, "payment_method_unavailable", "this payment method is not available")
 		return
 	}
 	var order billing.Order
@@ -825,6 +859,10 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]any{"order": order})
 		return
 	}
+	if provider == payment.ProviderEPUSDT {
+		s.createEPUSDTCheckout(w, r, order, pack, org.ID)
+		return
+	}
 	if s.cfg.PaymentConfigured() {
 		res, err := s.pay.Create(payment.CreateInput{OutTradeNo: order.OutTradeNo, AmountCents: pack.AmountCents, Title: pack.Title, Attach: org.ID})
 		if err != nil {
@@ -851,6 +889,50 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "payment_not_configured", "payment provider is not configured")
 		return
 	}
+	writeJSON(w, http.StatusCreated, map[string]any{"order": order})
+}
+
+// checkoutProvider resolves the provider a create-order request asked for. The
+// crypto gateway's allowlist is enforced here, not only by hiding the option in
+// the client; an unknown or unavailable provider is refused the same way.
+func (s *Server) checkoutProvider(requested, email string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(requested)) {
+	case "", payment.ProviderXunhuPay:
+		return payment.ProviderXunhuPay, true
+	case payment.ProviderEPUSDT:
+		if s.epusdt != nil && s.cfg.EPUSDTAllowed(email) {
+			return payment.ProviderEPUSDT, true
+		}
+	}
+	return "", false
+}
+
+// createEPUSDTCheckout opens the crypto checkout for a freshly created order.
+// The provider is stamped on the row first so reconciliation never asks the
+// wrong gateway about it.
+func (s *Server) createEPUSDTCheckout(w http.ResponseWriter, r *http.Request, order billing.Order, pack billing.CreditPack, orgID string) {
+	// A client that hangs up mid-request must not leave a gateway checkout
+	// that this row never learns about.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+	defer cancel()
+	if err := s.store.SetOrderProvider(ctx, order.ID, payment.ProviderEPUSDT); err != nil {
+		s.fail(w, err)
+		return
+	}
+	res, err := s.epusdt.Create(ctx, payment.CreateInput{OutTradeNo: order.OutTradeNo, AmountCents: pack.AmountCents, Title: pack.Title, Attach: orgID})
+	if err != nil {
+		s.log.Error("epusdt create failed", "err", err, "order", order.ID)
+		if markErr := s.store.MarkOrderFailed(ctx, order.ID, err.Error()); markErr != nil {
+			s.log.Warn("mark order failed", "order", order.ID, "err", markErr)
+		}
+		writeError(w, http.StatusBadGateway, "payment_unavailable", "payment provider unavailable")
+		return
+	}
+	if err := s.store.AttachPayment(ctx, order.ID, res.ProviderOrderID, "", res.PayURL); err != nil {
+		s.fail(w, err)
+		return
+	}
+	order.Provider, order.PayURL, order.Status = payment.ProviderEPUSDT, res.PayURL, "pending"
 	writeJSON(w, http.StatusCreated, map[string]any{"order": order})
 }
 
@@ -935,6 +1017,59 @@ func (s *Server) xunhuNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write([]byte("success"))
+}
+
+// epusdtNotify handles the crypto gateway's signed payment callback. The
+// gateway retries until it reads "ok", so every non-fulfilled outcome that a
+// retry could fix answers with an error status.
+func (s *Server) epusdtNotify(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.EPUSDTConfigured() || s.epusdt == nil || s.paidOrders == nil {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if err != nil {
+		http.Error(w, "bad body", http.StatusBadRequest)
+		return
+	}
+	n, err := s.epusdt.ParseNotification(body)
+	if err != nil {
+		s.log.Warn("epusdt notify rejected", "err", err)
+		http.Error(w, "bad sign", http.StatusBadRequest)
+		return
+	}
+	if n.Status != payment.EPUSDTStatusPaid {
+		// Only a settled payment changes an order; acknowledge anything else.
+		_, _ = w.Write([]byte("ok"))
+		return
+	}
+	o, err := s.paidOrders.OrderByTradeNo(r.Context(), n.OrderID)
+	if err != nil {
+		s.log.Warn("epusdt notify unknown order", "trade_no", n.OrderID)
+		http.Error(w, "unknown order", http.StatusNotFound)
+		return
+	}
+	if o.Provider != payment.ProviderEPUSDT {
+		s.log.Warn("epusdt notify for another provider's order", "order", o.ID, "provider", o.Provider)
+		http.Error(w, "unknown order", http.StatusNotFound)
+		return
+	}
+	if n.TradeID == "" || n.TradeID != o.ProviderOrderID {
+		// A signed callback for a checkout this order never opened.
+		s.log.Warn("epusdt notify trade id mismatch", "order", o.ID, "trade_id", n.TradeID)
+		http.Error(w, "unknown order", http.StatusNotFound)
+		return
+	}
+	// The gateway trade id is unique per order. The chain hash is not (one
+	// transaction can settle several orders), so it stays in the stored body.
+	if err := s.paidOrders.Fulfill(r.Context(), o.ID, "epusdt_"+n.TradeID, n.AmountCents, body); err != nil {
+		s.log.Error("epusdt fulfill failed", "order", o.ID, "err", err)
+		http.Error(w, "fulfill failed", http.StatusInternalServerError)
+		return
+	}
+	s.log.Info("epusdt order fulfilled", "order", o.ID, "token", n.Token, "network", n.Network,
+		"actual_amount", n.ActualAmount, "tx", n.BlockTransactionID)
+	_, _ = w.Write([]byte("ok"))
 }
 
 type leaseRequest struct {

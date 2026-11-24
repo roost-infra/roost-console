@@ -5,7 +5,7 @@ import { redeemEmailTokenHash } from './lib/emailConfirm';
 import { CopyButton, CopyField, DSALPHA_URL, EndpointList, KeyCreatedModal, MEMORY_MCP_URL, MODELS_URL, RELAY_BASE_URL, SnippetTabs } from './access';
 import { Brand, Icon, Sidebar, Topbar, useRoute } from './shell';
 import { ControlMemory, RelayControls } from './ControlMemory';
-import { api, type AdminOrg, type AdminOverview, type AdminOverviewDaily, type AdminReferrals, type BillingDetails, type BillingSandboxRow, type BillingTokenRow, type BillingView, type MeResponse, type Order, type Plan, type ReferralOverview, type RelayKey, type UsageDailyRow, type UsageRecentRow, type UsageSessionRow, type UsageTotals } from './lib/api';
+import { api, type AdminOrg, type AdminOverview, type AdminOverviewDaily, type AdminReferrals, type BillingDetails, type BillingSandboxRow, type BillingTokenRow, type BillingView, type MeResponse, type Order, type PaymentMethod, type Plan, type ReferralOverview, type RelayKey, type UsageDailyRow, type UsageRecentRow, type UsageSessionRow, type UsageTotals } from './lib/api';
 
 const PRODUCT_LABELS: Record<string, string> = {
   dsalpha: 'dsalpha · 投研工作台',
@@ -1463,6 +1463,31 @@ function Plans({ plans, current, alwaysOnUntil, onBuy, busy }: { plans: Plan[]; 
   );
 }
 
+const PAYMENT_METHOD_LABELS: Record<PaymentMethod, { name: string; note: string }> = {
+  xunhupay: { name: '微信 / 支付宝', note: '扫码支付，支付成功后立即到账。' },
+  epusdt: { name: 'USDT 等稳定币', note: '在支付页选择网络和币种，链上确认后到账。' },
+};
+
+function PaymentMethodModal({ methods, onPick, onClose }: { methods: PaymentMethod[]; onPick: (method: PaymentMethod) => void; onClose: () => void }) {
+  return (
+    <div className="modal" role="dialog" aria-modal="true" aria-label="选择支付方式">
+      <div className="modal__panel">
+        <button className="modal__close" onClick={onClose} aria-label="关闭">×</button>
+        <p className="kicker">PAYMENT</p>
+        <h2>选择支付方式</h2>
+        <div className="pay-methods">
+          {methods.map((method) => (
+            <button className="pay-method" key={method} type="button" onClick={() => onPick(method)}>
+              <strong>{PAYMENT_METHOD_LABELS[method].name}</strong>
+              <span>{PAYMENT_METHOD_LABELS[method].note}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OrderModal({ token, order, onClose, onPaid }: { token: string; order: Order; onClose: () => void; onPaid: () => void }) {
   const [current, setCurrent] = useState(order);
   const [error, setError] = useState('');
@@ -1523,6 +1548,11 @@ function OrderModal({ token, order, onClose, onPaid }: { token: string; order: O
             {current.qr_url && <img className="qr" src={current.qr_url} alt="支付二维码" />}
             {!current.qr_url && isDev && (
               <p className="dev-note">本地开发模式：虎皮椒未配置，使用测试支付完成回调链路。</p>
+            )}
+            {current.provider === 'epusdt' && (
+              <p className="pay-note">
+                请按支付页显示的精确金额转账，多付或少付都不会自动到账。链上确认需要几分钟，到账后本页会自动更新。
+              </p>
             )}
             {error && <p className="form-error">{error}</p>}
             <div className="modal__actions">
@@ -2455,6 +2485,8 @@ function Console({ session }: { session: Session }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [pendingOrder, setPendingOrder] = useState<Order | null>(null);
+  const [payMethods, setPayMethods] = useState<PaymentMethod[]>([]);
+  const [choosing, setChoosing] = useState<{ sku: string; amountCents?: number } | null>(null);
   const [claimNotice, setClaimNotice] = useState('');
   const [claimError, setClaimError] = useState('');
   const [referralVersion, setReferralVersion] = useState(0);
@@ -2468,6 +2500,8 @@ function Console({ session }: { session: Session }) {
       const [meData, plansData, ordersData] = await Promise.all([api.me(token), api.plans(token), api.orders(token)]);
       setMe(meData);
       setPlans(plansData.plans);
+      // Ignore methods this build does not know how to present.
+      setPayMethods((plansData.payment_methods ?? []).filter((method) => method in PAYMENT_METHOD_LABELS));
       setOrders(ordersData.orders);
       setError('');
     } catch (err) {
@@ -2515,11 +2549,22 @@ function Console({ session }: { session: Session }) {
     return () => { cancelled = true; };
   }, [me, token, load]);
 
-  async function buy(sku: string, amountCents?: number) {
+  // Free trials have nothing to pay; everything else asks for a payment method
+  // when the account has more than one.
+  function buy(sku: string, amountCents?: number) {
+    if (payMethods.length > 1 && !sku.startsWith('trial_')) {
+      setChoosing({ sku, amountCents });
+      return;
+    }
+    void checkout(sku, amountCents, payMethods.length === 1 ? payMethods[0] : undefined);
+  }
+
+  async function checkout(sku: string, amountCents?: number, provider?: PaymentMethod) {
+    setChoosing(null);
     setBusy(sku);
     setError('');
     try {
-      const { order } = await api.createOrder(token, sku, amountCents);
+      const { order } = await api.createOrder(token, sku, amountCents, provider);
       setPendingOrder(order);
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建订单失败');
@@ -2632,10 +2677,17 @@ function Console({ session }: { session: Session }) {
           {body}
           <footer className="page__foot">
             <span>© 2026 Roost</span>
-            <span>100 credits = ¥1 · 支付宝 / 微信支付</span>
+            <span>100 credits = ¥1</span>
           </footer>
         </main>
       </div>
+      {choosing && (
+        <PaymentMethodModal
+          methods={payMethods}
+          onPick={(method) => void checkout(choosing.sku, choosing.amountCents, method)}
+          onClose={() => setChoosing(null)}
+        />
+      )}
       {pendingOrder && <OrderModal token={token} order={pendingOrder} onClose={() => setPendingOrder(null)} onPaid={paid} />}
     </div>
   );

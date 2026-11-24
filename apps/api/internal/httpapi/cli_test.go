@@ -111,6 +111,7 @@ func testConfig() config.Config {
 		ServiceSecret:    "super-secret-service",
 		ServiceSecrets:   map[string][]string{"root": {"root-secret-value"}},
 		XunhuAppSecret:   "xunhu-secret-value",
+		EPUSDTSecretKey:  "epusdt-secret-value",
 		OIDCClientSecret: "oidc-client-secret",
 	}
 }
@@ -186,7 +187,7 @@ func TestCLIConfigDoesNotLeakSecrets(t *testing.T) {
 	raw, _ := json.Marshal(body)
 	text := string(raw)
 	for _, secret := range []string{
-		"super-secret-service", "root-secret-value", "xunhu-secret-value", "oidc-client-secret",
+		"super-secret-service", "root-secret-value", "xunhu-secret-value", "epusdt-secret-value", "oidc-client-secret",
 		"database_url", "service_secrets", "service_secret", "oidc_client_secret", "xunhu_app_secret",
 	} {
 		if strings.Contains(text, secret) {

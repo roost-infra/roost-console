@@ -92,10 +92,14 @@ export interface Order {
   amount_cents: number;
   credits: number;
   status: string;
+  provider?: PaymentMethod;
   qr_url?: string;
   pay_url?: string;
   created_at: string;
 }
+
+// Checkout providers: xunhupay is WeChat/Alipay, epusdt is the crypto gateway.
+export type PaymentMethod = 'xunhupay' | 'epusdt';
 
 const API = (import.meta.env.VITE_API_URL as string | undefined) ?? '';
 
@@ -477,11 +481,15 @@ export const api = {
   relayMemoryActivity: (token: string, orgId: string, after: number, signal?: AbortSignal) =>
     request<MemoryActivity[]>(relayControlPath(orgId) + '/memory-events?after=' + after, token, { signal }),
   me: (token: string) => request<MeResponse>('/v1/me', token),
-  plans: (token: string) => request<{ plans: Plan[] }>('/v1/billing/plans', token),
-  createOrder: (token: string, sku: string, amountCents?: number) =>
+  plans: (token: string) => request<{ plans: Plan[]; payment_methods?: PaymentMethod[] }>('/v1/billing/plans', token),
+  createOrder: (token: string, sku: string, amountCents?: number, provider?: PaymentMethod) =>
     request<{ order: Order }>('/v1/billing/orders', token, {
       method: 'POST',
-      body: JSON.stringify(amountCents === undefined ? { sku } : { sku, amount_cents: amountCents }),
+      body: JSON.stringify({
+        sku,
+        ...(amountCents === undefined ? {} : { amount_cents: amountCents }),
+        ...(provider === undefined ? {} : { provider }),
+      }),
     }),
   getOrder: (token: string, id: string) => request<{ order: Order }>(`/v1/billing/orders/${id}`, token),
   devPay: (token: string, id: string) => request<{ ok: boolean }>(`/v1/dev/orders/${id}/pay`, token, { method: 'POST' }),

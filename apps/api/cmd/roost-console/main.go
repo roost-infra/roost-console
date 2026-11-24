@@ -43,7 +43,7 @@ func supabaseHTTPClient(cfg config.Config) *http.Client {
 // against the provider. A webhook alone is not a delivery guarantee: if the
 // notify is lost or rejected the order must still be fulfilled, and an
 // abandoned checkout must not read as "in progress" forever.
-func startPaymentJobs(ctx context.Context, cfg config.Config, store *billing.Store, pay *payment.Client, log *slog.Logger) {
+func startPaymentJobs(ctx context.Context, cfg config.Config, store *billing.Store, pay *payment.Client, epusdt *payment.EPUSDT, log *slog.Logger) {
 	if store == nil {
 		return
 	}
@@ -53,8 +53,15 @@ func startPaymentJobs(ctx context.Context, cfg config.Config, store *billing.Sto
 			defer cancel()
 			// Reconcile before expiring: a paid order whose notify was lost must
 			// be fulfilled while it can still be queried, not closed as stale.
-			if cfg.PaymentConfigured() {
-				reconcileOrders(runCtx, store, pay, log)
+			if cfg.PaymentConfigured() || cfg.EPUSDTConfigured() {
+				var gateways orderGateways
+				if cfg.PaymentConfigured() {
+					gateways.xunhu = pay
+				}
+				if cfg.EPUSDTConfigured() {
+					gateways.epusdt = epusdt
+				}
+				reconcileOrders(runCtx, store, gateways, log)
 			}
 			if n, err := store.ExpireStaleOrders(runCtx, cfg.PaymentOrderTTL); err != nil {
 				log.Warn("order expiry failed", "err", err)
@@ -71,43 +78,130 @@ func startPaymentJobs(ctx context.Context, cfg config.Config, store *billing.Sto
 	}()
 }
 
-// reconcileOrders queries the provider for pending orders whose notify should
-// have arrived by now. Paid orders are fulfilled; cancelled checkouts are
-// closed. Failures are logged and retried on the next tick.
-func reconcileOrders(ctx context.Context, store *billing.Store, pay *payment.Client, log *slog.Logger) {
+// reconcileStore is the slice of the billing store reconciliation needs.
+type reconcileStore interface {
+	ListReconcileOrders(ctx context.Context, minAge time.Duration, limit int) ([]billing.Order, error)
+	TouchOrderReconcile(ctx context.Context, orderID string) error
+	Fulfill(ctx context.Context, orderID, providerTradeNo string, amountCents int, raw []byte) error
+	CloseOrder(ctx context.Context, orderID, status string) error
+}
+
+type xunhuQuerier interface {
+	Query(ctx context.Context, outTradeNo string) (payment.QueryResult, error)
+}
+
+type epusdtQuerier interface {
+	Status(ctx context.Context, tradeID string) (int, error)
+}
+
+// orderGateways holds the configured providers; a nil entry is not configured
+// and its orders are left alone.
+type orderGateways struct {
+	xunhu  xunhuQuerier
+	epusdt epusdtQuerier
+}
+
+// orderState is a provider's answer reduced to what reconciliation acts on.
+type orderState struct {
+	paid, closed bool
+	tradeNo      string
+	raw          []byte
+}
+
+// reconcileOrders queries each pending order's own provider once its notify
+// should have arrived. Paid orders are fulfilled; cancelled or expired
+// checkouts are closed. Failures are logged and retried on a later tick.
+func reconcileOrders(ctx context.Context, store reconcileStore, gateways orderGateways, log *slog.Logger) {
 	orders, err := store.ListReconcileOrders(ctx, 2*time.Minute, 20)
 	if err != nil {
 		log.Warn("order reconcile list failed", "err", err)
 		return
 	}
 	for _, order := range orders {
-		result, err := pay.Query(ctx, order.OutTradeNo)
+		query := gateways.queryFor(order)
+		var state orderState
+		var err error
+		if query != nil {
+			state, err = query(ctx)
+		}
 		// Back off this order for 10 minutes even on error: a broken secret or
-		// provider outage must not turn into a per-minute query storm.
+		// provider outage must not turn into a per-minute query storm. An order
+		// nobody can be asked about backs off too, so it cannot fill the batch.
 		if touchErr := store.TouchOrderReconcile(ctx, order.ID); touchErr != nil {
 			log.Warn("order reconcile touch failed", "order", order.ID, "err", touchErr)
 		}
-		if err != nil {
-			log.Warn("order reconcile query failed", "order", order.ID, "err", err)
+		if query == nil {
+			// Its provider is not configured here. Never ask a different one.
 			continue
 		}
-		switch result.Status {
-		case "OD":
-			raw, _ := json.Marshal(result.Raw)
-			tradeNo := reconciledTradeNo(result.Raw, order.ID)
-			if err := store.Fulfill(ctx, order.ID, tradeNo, order.AmountCents, raw); err != nil {
+		if err != nil {
+			log.Warn("order reconcile query failed", "order", order.ID, "provider", order.Provider, "err", err)
+			continue
+		}
+		switch {
+		case state.paid:
+			if err := store.Fulfill(ctx, order.ID, state.tradeNo, order.AmountCents, state.raw); err != nil {
 				log.Error("order reconcile fulfill failed", "order", order.ID, "err", err)
 				continue
 			}
-			log.Info("order reconciled as paid", "order", order.ID, "out_trade_no", order.OutTradeNo)
-		case "CD":
+			log.Info("order reconciled as paid", "order", order.ID, "provider", order.Provider, "out_trade_no", order.OutTradeNo)
+		case state.closed:
 			if err := store.CloseOrder(ctx, order.ID, "expired"); err != nil {
 				log.Warn("order reconcile close failed", "order", order.ID, "err", err)
 				continue
 			}
-			log.Info("order reconciled as cancelled", "order", order.ID, "out_trade_no", order.OutTradeNo)
+			log.Info("order reconciled as cancelled", "order", order.ID, "provider", order.Provider, "out_trade_no", order.OutTradeNo)
 		}
 	}
+}
+
+// queryFor returns the provider lookup for one order, or nil when that order's
+// provider is not configured.
+func (g orderGateways) queryFor(order billing.Order) func(context.Context) (orderState, error) {
+	switch order.Provider {
+	case payment.ProviderXunhuPay:
+		if g.xunhu == nil {
+			return nil
+		}
+		return func(ctx context.Context) (orderState, error) {
+			result, err := g.xunhu.Query(ctx, order.OutTradeNo)
+			if err != nil {
+				return orderState{}, err
+			}
+			raw, _ := json.Marshal(result.Raw)
+			return orderState{
+				paid:    result.Status == "OD",
+				closed:  result.Status == "CD",
+				tradeNo: reconciledTradeNo(result.Raw, order.ID),
+				raw:     raw,
+			}, nil
+		}
+	case payment.ProviderEPUSDT:
+		// An order without a gateway trade id never reached the cashier, so
+		// there is nothing to ask about; the TTL closes it.
+		if g.epusdt == nil || order.ProviderOrderID == "" {
+			return nil
+		}
+		return func(ctx context.Context) (orderState, error) {
+			status, err := g.epusdt.Status(ctx, order.ProviderOrderID)
+			if err != nil {
+				return orderState{}, err
+			}
+			raw, _ := json.Marshal(map[string]any{
+				"reconciled": true, "provider": payment.ProviderEPUSDT,
+				"trade_id": order.ProviderOrderID, "status": status,
+			})
+			return orderState{
+				paid:   status == payment.EPUSDTStatusPaid,
+				closed: status == payment.EPUSDTStatusExpired,
+				// A later callback carries the chain hash instead; Fulfill is
+				// idempotent, so whichever arrives first wins.
+				tradeNo: "epusdt_" + order.ProviderOrderID,
+				raw:     raw,
+			}, nil
+		}
+	}
+	return nil
 }
 
 // reconciledTradeNo prefers the provider's own identifiers so the row matches
@@ -150,8 +244,12 @@ func main() {
 		QueryURL:  cfg.XunhuQueryURL,
 		NotifyURL: cfg.XunhuNotifyURL, ReturnURL: cfg.XunhuReturnURL, HTTP: &http.Client{Timeout: 20 * time.Second},
 	}
-	srv := httpapi.New(cfg, store, verifier, pay, log)
-	startPaymentJobs(context.Background(), cfg, store, pay, log)
+	epusdt := &payment.EPUSDT{
+		APIBase: cfg.EPUSDTAPIBase, PID: cfg.EPUSDTPID, SecretKey: cfg.EPUSDTSecretKey,
+		NotifyURL: cfg.EPUSDTNotifyURL, ReturnURL: cfg.EPUSDTReturnURL, HTTP: &http.Client{Timeout: 20 * time.Second},
+	}
+	srv := httpapi.New(cfg, store, verifier, pay, epusdt, log)
+	startPaymentJobs(context.Background(), cfg, store, pay, epusdt, log)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()

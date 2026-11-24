@@ -8,7 +8,7 @@
 
 ## 0. 一句话
 
-**Supabase 是唯一身份源，Roost Console 是唯一控制面，Roost Credits 是唯一余额，虎皮椒是唯一支付入口。**
+**Supabase 是唯一身份源，Roost Console 是唯一控制面，Roost Credits 是唯一余额，虎皮椒是默认支付入口（可选的 USDT 通道见 §4.5）。**
 
 ```text
                      Supabase Auth
@@ -343,7 +343,20 @@ create table billing.payment_events (
 - 记录原始 payload 到 `payment_events`
 - 管理员可手工补单/退款，写审计
 
-### 4.5 自动续费
+### 4.5 第二通道：USDT（EPUSDT，可选）
+
+虎皮椒仍是默认入口。配置 `EPUSDT_*` 后增加一个可选的稳定币通道，
+接自建的 EPUSDT 网关（独立进程，只走它的 GMPay HTTP API）。
+
+- 订单仍落在 `billing.orders`，`provider='epusdt'`，`provider_order_id` 存网关 trade_id，
+  `pay_url` 是网关收银台地址；入账走同一个 `Fulfill`，余额不分通道。
+- 回调 `POST /v1/payments/epusdt/notify`：验 HMAC-SHA256 签名与 PID，
+  校验订单号、trade_id、人民币金额等于 `amount_cents`，返回 `ok`；否则返回非 2xx 触发重试。
+- 对账按订单的 `provider` 分流，绝不拿一个通道的结果给另一个通道的订单入账。
+- 可见范围由 `EPUSDT_ALLOW_EMAILS` 控制，接口侧强制校验。
+- 部署与运维见 `deploy/README.md`。
+
+### 4.6 自动续费
 
 虎皮椒单次支付不支持自动续费，因此：
 

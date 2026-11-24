@@ -203,9 +203,9 @@ func (s *Store) CreateCustomOrder(ctx context.Context, orgID string, amountCents
 	err = s.Pool.QueryRow(ctx, `
 		insert into billing.orders (org_id,out_trade_no,sku,amount_cents,credits,status)
 		values ($1,$2,$3,$4,$5,'created')
-		returning id,org_id,out_trade_no,sku,amount_cents,credits,status,created_at`,
+		returning id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,created_at`,
 		orgID, randomTradeNo(), pack.SKU, pack.AmountCents, pack.Credits,
-	).Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.CreatedAt)
+	).Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &o.CreatedAt)
 	return o, err
 }
 
@@ -234,9 +234,9 @@ func (s *Store) CreateOrder(ctx context.Context, orgID, sku string) (Order, erro
 	err = s.Pool.QueryRow(ctx, `
 		insert into billing.orders (org_id,out_trade_no,sku,amount_cents,credits,status)
 		values ($1,$2,$3,$4,$5,'created')
-		returning id,org_id,out_trade_no,sku,amount_cents,credits,status,created_at`,
+		returning id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,created_at`,
 		orgID, randomTradeNo(), sku, pack.AmountCents, pack.Credits,
-	).Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.CreatedAt)
+	).Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &o.CreatedAt)
 	_ = kind
 	if err != nil {
 		return Order{}, err
@@ -303,12 +303,26 @@ func (s *Store) AttachPayment(ctx context.Context, orderID, providerOrderID, qrU
 	return err
 }
 
+// SetOrderProvider records which payment provider a new order checks out with.
+// Only a still-'created' row can change: once a checkout exists the provider
+// decides who is asked about the payment.
+func (s *Store) SetOrderProvider(ctx context.Context, orderID, provider string) error {
+	tag, err := s.Pool.Exec(ctx, `update billing.orders set provider=$2,updated_at=now() where id=$1 and status='created'`, orderID, provider)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("set order provider: order %s is not awaiting checkout", orderID)
+	}
+	return nil
+}
+
 func (s *Store) GetOrder(ctx context.Context, orgID, orderID string) (Order, error) {
 	var o Order
 	err := s.Pool.QueryRow(ctx, `
-		select id,org_id,out_trade_no,sku,amount_cents,credits,status,coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
+		select id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,coalesce(provider_order_id,''),coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
 		from billing.orders where id=$1 and org_id=$2`, orderID, orgID).
-		Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt)
+		Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &o.ProviderOrderID, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, ErrNotFound
 	}
@@ -318,9 +332,9 @@ func (s *Store) GetOrder(ctx context.Context, orgID, orderID string) (Order, err
 func (s *Store) OrderByTradeNo(ctx context.Context, tradeNo string) (Order, error) {
 	var o Order
 	err := s.Pool.QueryRow(ctx, `
-		select id,org_id,out_trade_no,sku,amount_cents,credits,status,coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
+		select id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,coalesce(provider_order_id,''),coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
 		from billing.orders where out_trade_no=$1`, tradeNo).
-		Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt)
+		Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &o.ProviderOrderID, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, ErrNotFound
 	}
@@ -434,7 +448,7 @@ func (s *Store) ListOrders(ctx context.Context, orgID string, limit int) ([]Orde
 		limit = 30
 	}
 	rows, err := s.Pool.Query(ctx, `
-		select id,org_id,out_trade_no,sku,amount_cents,credits,status,coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
+		select id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,coalesce(provider_order_id,''),coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
 		from billing.orders where org_id=$1 order by created_at desc limit $2`, orgID, limit)
 	if err != nil {
 		return nil, err
@@ -443,7 +457,7 @@ func (s *Store) ListOrders(ctx context.Context, orgID string, limit int) ([]Orde
 	out := make([]Order, 0)
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &o.ProviderOrderID, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, o)
@@ -493,7 +507,7 @@ func (s *Store) ListReconcileOrders(ctx context.Context, minAge time.Duration, l
 		limit = 20
 	}
 	rows, err := s.Pool.Query(ctx, `
-		select id,org_id,out_trade_no,sku,amount_cents,credits,status,coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
+		select id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,coalesce(provider_order_id,''),coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
 		from billing.orders
 		where status='pending'
 		  and created_at < now() - make_interval(secs => $1)
@@ -509,7 +523,7 @@ func (s *Store) ListReconcileOrders(ctx context.Context, minAge time.Duration, l
 	out := make([]Order, 0, limit)
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &o.ProviderOrderID, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, o)
@@ -545,9 +559,9 @@ func (s *Store) CloseOrder(ctx context.Context, orderID, status string) error {
 func (s *Store) GetOrderByID(ctx context.Context, orderID string) (Order, error) {
 	var o Order
 	err := s.Pool.QueryRow(ctx, `
-		select id,org_id,out_trade_no,sku,amount_cents,credits,status,coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
+		select id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,coalesce(provider_order_id,''),coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
 		from billing.orders where id=$1`, orderID).
-		Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt)
+		Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &o.ProviderOrderID, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, ErrNotFound
 	}
