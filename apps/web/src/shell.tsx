@@ -150,7 +150,13 @@ export const ROUTE_TITLES: Record<RouteKey, string> = {
 export function Brand() {
   return (
     <a className="brand" href="/" aria-label="Roost 首页">
-      <span className="brand__mark" aria-hidden="true"><span /><span /></span>
+      <span className="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 28 28" focusable="false">
+          <path d="M4 22V10.5L14 5l10 5.5V22" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" />
+          <path d="M9 22v-7.2h10V22" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" opacity=".55" />
+          <circle cx="14" cy="10.6" r="2.1" fill="currentColor" />
+        </svg>
+      </span>
       <span className="brand__name">Roost</span>
       <span className="brand__tag">Console</span>
     </a>
