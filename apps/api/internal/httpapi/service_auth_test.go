@@ -37,6 +37,27 @@ func TestVerifyServiceAcceptsPublicPathSignature(t *testing.T) {
 	}
 }
 
+func TestVerifyServiceAcceptsRenamedProduct(t *testing.T) {
+	s := testServiceServer()
+	body := []byte(`{"user_id":"u1","run_ref":"r1"}`)
+	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8790/api/auth/billing/leases/acquire", nil)
+	publicURI := "/console-api" + r.URL.RequestURI()
+	ts, nonce, sig := auth.SignService("dsalpha", r.Method, publicURI, body, "dslpha-secret", time.Now())
+	r.Header.Set("X-Roost-Service", "dsalpha")
+	r.Header.Set("X-Roost-Timestamp", ts)
+	r.Header.Set("X-Roost-Nonce", nonce)
+	r.Header.Set("X-Roost-Signature", sig)
+	if !s.verifyService("dsalpha", r, body) {
+		t.Fatal("renamed product signature was rejected")
+	}
+	if !serviceAllows("dsalpha", http.MethodPost, "/api/auth/billing/leases/acquire") {
+		t.Fatal("renamed product scope was rejected")
+	}
+	if !s.verifyLegacyServiceToken("dsalpha", "dslpha-secret") {
+		t.Fatal("renamed product legacy token was rejected")
+	}
+}
+
 func TestVerifyServiceRejectsWrongSignature(t *testing.T) {
 	s := testServiceServer()
 	body := []byte(`{}`)

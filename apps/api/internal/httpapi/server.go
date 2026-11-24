@@ -395,7 +395,7 @@ func (s *Server) verifyService(service string, r *http.Request, body []byte) boo
 	if service == "" {
 		return false
 	}
-	for _, secret := range s.cfg.ServiceSecrets[service] {
+	for _, secret := range s.cfg.ServiceSecrets[canonicalService(service)] {
 		if secret == "" {
 			continue
 		}
@@ -420,7 +420,7 @@ func (s *Server) verifyLegacyServiceToken(service, token string) bool {
 	if token == "" {
 		return false
 	}
-	for _, secret := range s.cfg.ServiceSecrets[service] {
+	for _, secret := range s.cfg.ServiceSecrets[canonicalService(service)] {
 		if secret != "" && subtle.ConstantTimeCompare([]byte(secret), []byte(token)) == 1 {
 			return true
 		}
@@ -428,8 +428,18 @@ func (s *Server) verifyLegacyServiceToken(service, token string) bool {
 	return false
 }
 
+// canonicalService maps the product's new wire name to the historical service
+// key. Console config still names the key "dslpha"; accepting "dsalpha" here
+// lets dslalpha move first-party calls without a config/cutover window.
+func canonicalService(service string) string {
+	if strings.EqualFold(strings.TrimSpace(service), "dsalpha") {
+		return "dslpha"
+	}
+	return service
+}
+
 func serviceAllows(service, method, path string) bool {
-	allowed, ok := serviceScopes[service]
+	allowed, ok := serviceScopes[canonicalService(service)]
 	if !ok {
 		return false
 	}
