@@ -63,9 +63,12 @@ type USDTQuote struct {
 type OKXUSDT struct {
 	// Addresses maps a chain to the deposit address shown to payers.
 	Addresses map[string]string
-	// Rate is CNY per USDT. Quotes are computed with it, so a stale rate makes
-	// the console ask for the wrong amount.
+	// Rate is the fallback CNY-per-USDT rate: it seeds the feed and is used
+	// whenever a live quote is unavailable.
 	Rate float64
+	// Rates, when set, supplies a live CNY-per-USDT rate and takes precedence
+	// over Rate.
+	Rates *RateFeed
 	// OrderTTL bounds how long a quote stays valid.
 	OrderTTL time.Duration
 	// ToleranceMicro absorbs the last-decimal noise some wallets produce.
@@ -76,7 +79,46 @@ type OKXUSDT struct {
 
 // Configured reports whether the channel can take orders at all.
 func (c *OKXUSDT) Configured() bool {
-	return c != nil && c.Rate > 0 && len(c.Chains()) > 0
+	if c == nil || len(c.Chains()) == 0 {
+		return false
+	}
+	_, ok := c.currentRate()
+	return ok
+}
+
+// currentRate returns the CNY-per-USDT rate to quote with, preferring the live
+// feed and falling back to the configured static rate.
+func (c *OKXUSDT) currentRate() (float64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	if c.Rates != nil {
+		if rate, at, ok := c.Rates.Current(); ok && rate > 0 {
+			_ = at
+			return rate, true
+		}
+	}
+	if c.Rate > 0 {
+		return c.Rate, true
+	}
+	return 0, false
+}
+
+// RateInfo reports the rate a quote would use and when it was obtained, for
+// display next to the checkout.
+func (c *OKXUSDT) RateInfo() (float64, time.Time, bool) {
+	if c == nil {
+		return 0, time.Time{}, false
+	}
+	if c.Rates != nil {
+		if rate, at, ok := c.Rates.Current(); ok && rate > 0 {
+			return rate, at, true
+		}
+	}
+	if c.Rate > 0 {
+		return c.Rate, time.Time{}, true
+	}
+	return 0, time.Time{}, false
 }
 
 // AutoConfirm reports whether deposits are reconciled through the OKX API.
@@ -113,7 +155,8 @@ func (c *OKXUSDT) Address(chain string) string {
 // USDT) makes it unique among open orders, which is what lets a plain address
 // be reconciled without per-user deposit addresses.
 func (c *OKXUSDT) Quote(chain string, cnyCents int64, suffix int64) (USDTQuote, error) {
-	if c == nil || c.Rate <= 0 {
+	rate, ok := c.currentRate()
+	if !ok {
 		return USDTQuote{}, errors.New("okx usdt: rate is not configured")
 	}
 	address := c.Address(chain)
@@ -124,7 +167,7 @@ func (c *OKXUSDT) Quote(chain string, cnyCents int64, suffix int64) (USDTQuote, 
 		return USDTQuote{}, errors.New("okx usdt: amount must be positive")
 	}
 	// micro = cents/100 CNY / (CNY per USDT) * 1e6
-	base := int64(math.Round(float64(cnyCents) * 1e4 / c.Rate))
+	base := int64(math.Round(float64(cnyCents) * 1e4 / rate))
 	base = base / 10_000 * 10_000 // round down to whole cents
 	if base < 10_000 {
 		base = 10_000 // never quote less than 0.01 USDT
@@ -142,7 +185,7 @@ func (c *OKXUSDT) Quote(chain string, cnyCents int64, suffix int64) (USDTQuote, 
 		Address:     address,
 		Amount:      FormatMicro(amount),
 		AmountMicro: amount,
-		Rate:        c.Rate,
+		Rate:        rate,
 		ExpiresAt:   time.Now().Add(ttl).UTC(),
 	}, nil
 }

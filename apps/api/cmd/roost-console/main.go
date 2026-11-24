@@ -160,8 +160,14 @@ func main() {
 		QueryURL:  cfg.XunhuQueryURL,
 		NotifyURL: cfg.XunhuNotifyURL, ReturnURL: cfg.XunhuReturnURL, HTTP: &http.Client{Timeout: 20 * time.Second},
 	}
-	usdt := okxUSDTChannel(cfg)
-	srv := httpapi.New(cfg, store, verifier, pay, log)
+	usdt := httpapi.USDTChannelFromConfig(cfg)
+	if usdt != nil && usdt.Rates != nil {
+		// Live USDT/CNY pricing: refresh on the configured interval and keep
+		// the last good value when a refresh fails.
+		usdt.Rates.Log = log
+		go usdt.Rates.Run(context.Background(), cfg.OKXUSDTRateRefresh)
+	}
+	srv := httpapi.New(cfg, store, verifier, pay, log).WithUSDT(usdt)
 	startPaymentJobs(context.Background(), cfg, store, pay, usdt, log)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
@@ -211,33 +217,6 @@ func main() {
 	_ = httpServer.Shutdown(shutdown)
 	if metricsServer != nil {
 		_ = metricsServer.Shutdown(shutdown)
-	}
-}
-
-// okxUSDTChannel builds the direct-USDT channel from the environment.
-func okxUSDTChannel(cfg config.Config) *payment.OKXUSDT {
-	if !cfg.OKXUSDTConfigured() {
-		return nil
-	}
-	return &payment.OKXUSDT{
-		Addresses: map[string]string{
-			payment.ChainTRC20:   cfg.OKXUSDTAddressTRC20,
-			payment.ChainERC20:   cfg.OKXUSDTAddressERC20,
-			payment.ChainPolygon: cfg.OKXUSDTAddressPolygon,
-		},
-		Rate:     cfg.OKXUSDTCNYRate,
-		OrderTTL: cfg.OKXUSDTOrderTTL,
-		Client: &payment.OKXClient{
-			BaseURL:    cfg.OKXAPIBase,
-			Key:        cfg.OKXAPIKey,
-			Secret:     cfg.OKXAPISecret,
-			Passphrase: cfg.OKXAPIPassphrase,
-			ChainCodes: map[string]string{
-				payment.ChainTRC20:   "TRC20",
-				payment.ChainERC20:   "ERC20",
-				payment.ChainPolygon: "Polygon",
-			},
-		},
 	}
 }
 

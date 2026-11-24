@@ -39,6 +39,10 @@ type Config struct {
 	OKXUSDTAddressERC20   string
 	OKXUSDTAddressPolygon string
 	OKXUSDTCNYRate        float64
+	OKXUSDTRateAuto       bool
+	OKXUSDTRateRefresh    time.Duration
+	OKXUSDTRateMin        float64
+	OKXUSDTRateMax        float64
 	OKXUSDTOrderTTL       time.Duration
 	OKXUSDTAllowEmails    []string
 	OKXAPIKey             string
@@ -110,6 +114,10 @@ func Load() Config {
 		OKXUSDTAddressERC20:   strings.TrimSpace(get("OKX_USDT_ADDRESS_ERC20", "")),
 		OKXUSDTAddressPolygon: strings.TrimSpace(get("OKX_USDT_ADDRESS_POLYGON", "")),
 		OKXUSDTCNYRate:        getFloat("OKX_USDT_CNY_RATE", 0),
+		OKXUSDTRateAuto:       getBool("OKX_USDT_RATE_AUTO", true),
+		OKXUSDTRateRefresh:    getDuration("OKX_USDT_RATE_REFRESH", 5*time.Minute),
+		OKXUSDTRateMin:        getFloat("OKX_USDT_RATE_MIN", 5),
+		OKXUSDTRateMax:        getFloat("OKX_USDT_RATE_MAX", 12),
 		OKXUSDTOrderTTL:       getDuration("OKX_USDT_ORDER_TTL", 30*time.Minute),
 		OKXUSDTAllowEmails:    splitCSV(get("OKX_USDT_ALLOW_EMAILS", "")),
 		OKXAPIKey:             get("OKX_API_KEY", ""),
@@ -150,6 +158,19 @@ func getDuration(k string, d time.Duration) time.Duration {
 		return d
 	}
 	return parsed
+}
+
+func getBool(k string, d bool) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(k)))
+	switch raw {
+	case "":
+		return d
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return d
 }
 
 func getFloat(k string, d float64) float64 {
@@ -197,8 +218,14 @@ func getInt64(k string, d int64) int64 {
 // A positive CNY/USDT rate is required: without it the console cannot quote the
 // amount to send, which is the only thing matching relies on.
 func (c Config) OKXUSDTConfigured() bool {
-	return c.OKXUSDTCNYRate > 0 &&
-		(c.OKXUSDTAddressTRC20 != "" || c.OKXUSDTAddressERC20 != "" || c.OKXUSDTAddressPolygon != "")
+	// With automatic pricing the rate arrives from the market feed, so only a
+	// deposit address is strictly required. A static rate still works as the
+	// seed and as the fallback when the feed is disabled.
+	priced := c.OKXUSDTAddressTRC20 != "" || c.OKXUSDTAddressERC20 != "" || c.OKXUSDTAddressPolygon != ""
+	if !priced {
+		return false
+	}
+	return c.OKXUSDTCNYRate > 0 || c.OKXUSDTRateAuto
 }
 
 func (c Config) PaymentConfigured() bool {

@@ -74,6 +74,21 @@ OKX_USDT_ORDER_TTL=30m
 OKX_USDT_ALLOW_EMAILS=
 ```
 
+汇率默认是**实时取价**（OKX 公开行情 `USDT-CNY`，无需凭证），每 5 分钟刷新一次：
+
+```bash
+OKX_USDT_RATE_AUTO=true      # 默认 true；关掉后用 OKX_USDT_CNY_RATE 固定汇率
+OKX_USDT_RATE_REFRESH=5m
+OKX_USDT_RATE_MIN=5          # 低于这个值的行情视为异常，丢弃并沿用上一次
+OKX_USDT_RATE_MAX=12
+```
+
+- 行情拉取失败时沿用上一次成功值；`OKX_USDT_CNY_RATE` 作为初始种子和最终兜底，
+  所以即使行情源挂了，报价仍然可用。
+- 超出 `MIN/MAX` 的价格会被拒绝（防止错误行情把金额算歪）。
+- 每笔订单会把当时的汇率写进 `raw.usdt_rate`，事后可以核对是按什么价成交的。
+- 行情源地址跟随 `OKX_API_BASE`（默认 `https://www.okx.com`）。
+
 自动入账还需要一个**只读**的 OKX API Key（资产-充值查询权限）：
 
 ```bash

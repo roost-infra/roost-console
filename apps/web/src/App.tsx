@@ -1528,6 +1528,9 @@ function USDTPayPanel({ order }: { order: Order }) {
         必须发送 <strong>{usdt.amount} USDT</strong>（{usdt.chain}），金额多一分少一分都无法自动识别；
         网络手续费请另外支付，不要从转账金额里扣。到账后自动入账，通常 1–3 分钟。
       </p>
+      <p className="usdt-pay__rate">
+        按实时汇率 1 USDT ≈ ¥{usdt.rate.toFixed(4)} 计算；金额已含换算，请勿按人民币金额改写。
+      </p>
       <p className="usdt-pay__timer">剩余有效时间 {left}</p>
     </div>
   );

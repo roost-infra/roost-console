@@ -90,7 +90,7 @@ func New(cfg config.Config, store *billing.Store, verifier *auth.Verifier, pay *
 	}
 	signer, _ := oidc.NewSigner()
 	s := &Server{cfg: cfg, store: store, verifier: verifier, pay: pay, log: log, signer: signer}
-	s.usdt = usdtChannelFromConfig(cfg)
+	s.usdt = USDTChannelFromConfig(cfg)
 	s.signingPrefixes = signingPathPrefixes(cfg.PublicBaseURL)
 	if store != nil {
 		s.membership = store
@@ -713,9 +713,9 @@ func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"plans": plans})
 }
 
-// usdtChannelFromConfig builds the direct-USDT channel from environment
-// config. A missing rate or address leaves it nil, which hides the option.
-func usdtChannelFromConfig(cfg config.Config) *payment.OKXUSDT {
+// USDTChannelFromConfig builds the direct-USDT channel from environment
+// config. Missing addresses leave it nil, which hides the option entirely.
+func USDTChannelFromConfig(cfg config.Config) *payment.OKXUSDT {
 	if !cfg.OKXUSDTConfigured() {
 		return nil
 	}
@@ -737,6 +737,7 @@ func usdtChannelFromConfig(cfg config.Config) *payment.OKXUSDT {
 			payment.ChainPolygon: cfg.OKXUSDTAddressPolygon,
 		},
 		Rate:     cfg.OKXUSDTCNYRate,
+		Rates:    payment.RateFeedForConfig(cfg.OKXUSDTRateAuto, cfg.OKXUSDTCNYRate, cfg.OKXUSDTRateMin, cfg.OKXUSDTRateMax, cfg.OKXUSDTOrderTTL, cfg.OKXAPIBase),
 		OrderTTL: cfg.OKXUSDTOrderTTL,
 		Client:   client,
 	}
