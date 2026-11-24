@@ -1337,8 +1337,20 @@ function CausalMemory({ token, orgId }: { token: string; orgId: string }) {
   );
 }
 
-function Recharge({ current, alwaysOnUntil, onBuy, busy }: { current: string; alwaysOnUntil?: string | null; onBuy: (sku: string, amountCents?: number) => void; busy: string }) {
+function Recharge({ current, alwaysOnUntil, onBuy, busy, methods }: {
+  current: string;
+  alwaysOnUntil?: string | null;
+  onBuy: (sku: string, amountCents?: number, opts?: { method?: string; chain?: string }) => void;
+  busy: string;
+  methods: string[];
+}) {
   const addon = current === 'pro' || current === 'max';
+  const usdtAvailable = methods.includes('okx_usdt');
+  const [channel, setChannel] = useState<'online' | 'okx_usdt'>('online');
+  const [chain, setChain] = useState(USDT_CHAINS[0]);
+  // channel is part of every purchase, so the button label tells the truth
+  const buyOpts = channel === 'okx_usdt' ? { method: 'okx_usdt', chain } : undefined;
+  const cta = channel === 'okx_usdt' ? 'USDT 支付' : '立即充值';
   const [customYuan, setCustomYuan] = useState('200');
   const customValue = Number(customYuan);
   const customCents = Math.round(customValue * 100);
@@ -1347,7 +1359,24 @@ function Recharge({ current, alwaysOnUntil, onBuy, busy }: { current: string; al
     <section className="section" id="recharge">
       <div className="section__head">
         <div><p className="kicker">TOP UP</p><h2>单独充值积分。</h2></div>
-        <p className="section__intro">不绑定套餐，按需购买；支付成功后自动到账，Sandbox、Market、dsalpha、Causal Memory 共用同一份余额。</p>
+        <div className="recharge-head">
+          <p className="section__intro">不绑定套餐，按需购买；支付成功后自动到账，Sandbox、Market、dsalpha、Causal Memory 共用同一份余额。</p>
+          {usdtAvailable && (
+            <div className="recharge-channel">
+              <div className="seg" role="group" aria-label="支付方式">
+                <button type="button" className={`seg__btn ${channel === 'online' ? 'is-active' : ''}`} onClick={() => setChannel('online')}>在线支付</button>
+                <button type="button" className={`seg__btn ${channel === 'okx_usdt' ? 'is-active' : ''}`} onClick={() => setChannel('okx_usdt')}>USDT</button>
+              </div>
+              {channel === 'okx_usdt' && (
+                <div className="seg recharge-chain" role="group" aria-label="USDT 网络">
+                  {USDT_CHAINS.map((item) => (
+                    <button key={item} type="button" className={`seg__btn ${chain === item ? 'is-active' : ''}`} onClick={() => setChain(item)}>{item}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       <div className="recharge-grid">
         {CREDIT_PACKS.map((pack) => (
@@ -1355,8 +1384,8 @@ function Recharge({ current, alwaysOnUntil, onBuy, busy }: { current: string; al
             <p className="recharge-card__credits">{pack.label}</p>
             <div className="recharge-card__price"><strong>{pack.price}</strong><span>一次性</span></div>
             <p className="recharge-card__note">{pack.note}</p>
-            <button className="btn btn--ink btn--wide" disabled={busy === pack.sku} onClick={() => onBuy(pack.sku)}>
-              {busy === pack.sku ? '创建订单…' : '立即充值'}
+            <button className="btn btn--ink btn--wide" disabled={busy === pack.sku} onClick={() => onBuy(pack.sku, undefined, buyOpts)}>
+              {busy === pack.sku ? '创建订单…' : cta}
             </button>
           </article>
         ))}
@@ -1377,9 +1406,9 @@ function Recharge({ current, alwaysOnUntil, onBuy, busy }: { current: string; al
           <button
             className="btn btn--ink btn--wide"
             disabled={!customValid || busy === 'credit_custom'}
-            onClick={() => onBuy('credit_custom', customCents)}
+            onClick={() => onBuy('credit_custom', customCents, buyOpts)}
           >
-            {busy === 'credit_custom' ? '创建订单…' : customValid ? `充值 ¥${customValue}` : '请输入 ¥10–¥5000'}
+            {busy === 'credit_custom' ? '创建订单…' : customValid ? `${cta} ¥${customValue}` : '请输入 ¥10–¥5000'}
           </button>
         </article>
         {addon && (
@@ -1391,7 +1420,7 @@ function Recharge({ current, alwaysOnUntil, onBuy, busy }: { current: string; al
                 ? `已开通至 ${new Date(alwaysOnUntil).toLocaleDateString('zh-CN')}，可继续续期。`
                 : '常驻沙箱，不占普通沙箱配额。'}
             </p>
-            <button className="btn btn--ink btn--wide" disabled={busy === 'addon_always_on_30d'} onClick={() => onBuy('addon_always_on_30d')}>
+            <button className="btn btn--ink btn--wide" disabled={busy === 'addon_always_on_30d'} onClick={() => onBuy('addon_always_on_30d', undefined, buyOpts)}>
               {busy === 'addon_always_on_30d' ? '创建订单…' : '开通 / 续期'}
             </button>
           </article>
@@ -1461,6 +1490,49 @@ function Plans({ plans, current, alwaysOnUntil, onBuy, busy }: { plans: Plan[]; 
   );
 }
 
+const USDT_CHAINS = ['TRC20', 'ERC20', 'POLYGON'];
+
+/** Payment instructions for a direct-USDT order: chain, exact amount, address. */
+function USDTPayPanel({ order }: { order: Order }) {
+  const usdt = order.usdt;
+  const [left, setLeft] = useState('');
+  useEffect(() => {
+    if (!usdt) return;
+    const tick = () => {
+      const ms = new Date(usdt.expires_at).getTime() - Date.now();
+      if (ms <= 0) { setLeft('已过期，请重新下单'); return; }
+      const s = Math.floor(ms / 1000);
+      setLeft(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [usdt]);
+  if (!usdt) return null;
+  return (
+    <div className="usdt-pay">
+      <div className="usdt-pay__row">
+        <span className="usdt-pay__label">网络</span>
+        <span className="pill pill--accent">{usdt.chain}</span>
+      </div>
+      <div className="usdt-pay__amount">
+        <span className="usdt-pay__unit">USDT</span>
+        <strong>{usdt.amount}</strong>
+        <CopyButton text={usdt.amount} label="复制金额" />
+      </div>
+      <div className="usdt-pay__address">
+        <code>{usdt.address}</code>
+        <CopyButton text={usdt.address} label="复制地址" />
+      </div>
+      <p className="usdt-pay__hint">
+        必须发送 <strong>{usdt.amount} USDT</strong>（{usdt.chain}），金额多一分少一分都无法自动识别；
+        网络手续费请另外支付，不要从转账金额里扣。到账后自动入账，通常 1–3 分钟。
+      </p>
+      <p className="usdt-pay__timer">剩余有效时间 {left}</p>
+    </div>
+  );
+}
+
 function OrderModal({ token, order, onClose, onPaid }: { token: string; order: Order; onClose: () => void; onPaid: () => void }) {
   const [current, setCurrent] = useState(order);
   const [error, setError] = useState('');
@@ -1516,6 +1588,14 @@ function OrderModal({ token, order, onClose, onPaid }: { token: string; order: O
             <p>积分已进入组织钱包，所有产品立即可用。</p>
             <button className="btn btn--ink btn--wide" onClick={onClose}>返回控制台</button>
           </div>
+        ) : current.usdt ? (
+          <>
+            {error && <p className="form-error">{error}</p>}
+            <USDTPayPanel order={current} />
+            <div className="modal__actions">
+              <button className="btn btn--ink btn--wide" onClick={onClose}>我已转账</button>
+            </div>
+          </>
         ) : (
           <>
             {current.qr_url && <img className="qr" src={current.qr_url} alt="支付二维码" />}
@@ -2513,11 +2593,11 @@ function Console({ session }: { session: Session }) {
     return () => { cancelled = true; };
   }, [me, token, load]);
 
-  async function buy(sku: string, amountCents?: number) {
+  async function buy(sku: string, amountCents?: number, opts?: { method?: string; chain?: string }) {
     setBusy(sku);
     setError('');
     try {
-      const { order } = await api.createOrder(token, sku, amountCents);
+      const { order } = await api.createOrder(token, sku, amountCents, opts);
       setPendingOrder(order);
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建订单失败');
@@ -2574,7 +2654,13 @@ function Console({ session }: { session: Session }) {
       body = (
         <>
           <WalletCard billing={me.billing} />
-          <Recharge current={me.billing.plan.code} alwaysOnUntil={me.billing.always_on_until} onBuy={buy} busy={busy} />
+          <Recharge
+            current={me.billing.plan.code}
+            alwaysOnUntil={me.billing.always_on_until}
+            onBuy={buy}
+            busy={busy}
+            methods={me.payment_methods ?? ['online']}
+          />
         </>
       );
       break;

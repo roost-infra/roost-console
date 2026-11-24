@@ -53,8 +53,11 @@ type Server struct {
 	store    *billing.Store
 	verifier *auth.Verifier
 	pay      *payment.Client
-	log      *slog.Logger
-	signer   *oidc.Signer
+	// usdt is the optional direct-USDT channel (payer sends to our own OKX
+	// address). Nil or unconfigured removes it from the checkout options.
+	usdt   *payment.OKXUSDT
+	log    *slog.Logger
+	signer *oidc.Signer
 
 	// Test seams. New() wires both to store; production paths fall back to
 	// store when the fields are nil.
@@ -87,6 +90,7 @@ func New(cfg config.Config, store *billing.Store, verifier *auth.Verifier, pay *
 	}
 	signer, _ := oidc.NewSigner()
 	s := &Server{cfg: cfg, store: store, verifier: verifier, pay: pay, log: log, signer: signer}
+	s.usdt = usdtChannelFromConfig(cfg)
 	s.signingPrefixes = signingPathPrefixes(cfg.PublicBaseURL)
 	if store != nil {
 		s.membership = store
@@ -694,7 +698,10 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": u, "org": org, "billing": view})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": u, "org": org, "billing": view,
+		"payment_methods": s.paymentMethods(u),
+	})
 }
 
 func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
@@ -704,6 +711,111 @@ func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"plans": plans})
+}
+
+// usdtChannelFromConfig builds the direct-USDT channel from environment
+// config. A missing rate or address leaves it nil, which hides the option.
+func usdtChannelFromConfig(cfg config.Config) *payment.OKXUSDT {
+	if !cfg.OKXUSDTConfigured() {
+		return nil
+	}
+	client := &payment.OKXClient{
+		BaseURL:    cfg.OKXAPIBase,
+		Key:        cfg.OKXAPIKey,
+		Secret:     cfg.OKXAPISecret,
+		Passphrase: cfg.OKXAPIPassphrase,
+		ChainCodes: map[string]string{
+			payment.ChainTRC20:   "TRC20",
+			payment.ChainERC20:   "ERC20",
+			payment.ChainPolygon: "Polygon",
+		},
+	}
+	return &payment.OKXUSDT{
+		Addresses: map[string]string{
+			payment.ChainTRC20:   cfg.OKXUSDTAddressTRC20,
+			payment.ChainERC20:   cfg.OKXUSDTAddressERC20,
+			payment.ChainPolygon: cfg.OKXUSDTAddressPolygon,
+		},
+		Rate:     cfg.OKXUSDTCNYRate,
+		OrderTTL: cfg.OKXUSDTOrderTTL,
+		Client:   client,
+	}
+}
+
+// WithUSDT replaces the direct-USDT channel; nil disables it. Tests use it.
+func (s *Server) WithUSDT(c *payment.OKXUSDT) *Server {
+	s.usdt = c
+	return s
+}
+
+// usdtUsable reports whether this account may pay in USDT right now.
+func (s *Server) usdtUsable(u *auth.User) bool {
+	if s.usdt == nil || !s.usdt.Configured() {
+		return false
+	}
+	if len(s.cfg.OKXUSDTAllowEmails) == 0 {
+		return true
+	}
+	if u == nil {
+		return false
+	}
+	for _, allowed := range s.cfg.OKXUSDTAllowEmails {
+		if strings.EqualFold(strings.TrimSpace(u.Email), allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+// paymentMethods lists the checkout channels this account can use.
+func (s *Server) paymentMethods(u *auth.User) []string {
+	methods := []string{"online"}
+	if s.usdtUsable(u) {
+		methods = append(methods, payment.ProviderOKXUSDT)
+	}
+	return methods
+}
+
+// usdtQuote picks the first enabled chain and quotes an amount no other open
+// order holds. Uniqueness is what lets a single shared address reconcile.
+func (s *Server) usdtQuote(ctx context.Context, chain string, amountCents int64) (payment.USDTQuote, error) {
+	chains := s.usdt.Chains()
+	if len(chains) == 0 {
+		return payment.USDTQuote{}, payment.ErrNoChain
+	}
+	if chain == "" {
+		chain = chains[0]
+	}
+	found := false
+	for _, enabled := range chains {
+		if strings.EqualFold(enabled, chain) {
+			chain, found = enabled, true
+			break
+		}
+	}
+	if !found {
+		return payment.USDTQuote{}, fmt.Errorf("unsupported chain %q", chain)
+	}
+	var lastErr error
+	for attempt := 0; attempt < 6; attempt++ {
+		suffix := time.Now().UnixNano()%99 + int64(attempt)*7
+		quote, err := s.usdt.Quote(chain, amountCents, suffix)
+		if err != nil {
+			return payment.USDTQuote{}, err
+		}
+		used, err := s.store.USDTAmountInUse(ctx, payment.ProviderOKXUSDT, chain, quote.Amount)
+		if err != nil {
+			return payment.USDTQuote{}, err
+		}
+		if !used {
+			return quote, nil
+		}
+		lastErr = errors.New("amount collision")
+	}
+	if lastErr == nil {
+		lastErr = errors.New("amount collision")
+	}
+	return payment.USDTQuote{}, lastErr
 }
 
 func (s *Server) billingView(w http.ResponseWriter, r *http.Request) {
@@ -739,6 +851,11 @@ type createOrderRequest struct {
 	// AmountCents is only read for the custom top-up SKU; every other SKU is
 	// priced server-side by Quote and ignores it.
 	AmountCents int64 `json:"amount_cents"`
+	// Method selects the payment channel. Empty keeps the default (XunhuPay);
+	// "okx_usdt" pays in USDT to our own OKX address.
+	Method string `json:"method"`
+	// Chain selects the USDT network for method "okx_usdt".
+	Chain string `json:"chain"`
 }
 
 type orderResponse struct {
@@ -761,7 +878,8 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	var order billing.Order
 	var pack billing.CreditPack
-	if req.SKU == billing.CustomTopUpSKU {
+	custom := req.SKU == billing.CustomTopUpSKU
+	if custom {
 		pack, err = billing.CustomTopUpQuote(req.AmountCents)
 		if err != nil {
 			if errors.Is(err, billing.ErrInvalidTopUpAmount) {
@@ -771,13 +889,41 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, err)
 			return
 		}
-		order, err = s.store.CreateCustomOrder(r.Context(), org.ID, req.AmountCents)
 	} else {
 		pack, _, err = s.store.QuoteForOrg(r.Context(), org.ID, req.SKU)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
+	}
+
+	// Direct USDT: no provider call, just a quote the payer sends to our own
+	// address. The order is reconcilable only because the amount is unique.
+	if req.Method == payment.ProviderOKXUSDT {
+		if !s.usdtUsable(u) {
+			writeError(w, http.StatusBadRequest, "method_unavailable", "USDT checkout is not available")
+			return
+		}
+		quote, err := s.usdtQuote(r.Context(), req.Chain, int64(pack.AmountCents))
+		if err != nil {
+			s.log.Warn("usdt quote failed", "err", err, "sku", req.SKU)
+			writeError(w, http.StatusServiceUnavailable, "payment_unavailable", "USDT checkout is not available")
+			return
+		}
+		order, err = s.store.CreateUSDTOrder(r.Context(), org.ID, req.SKU,
+			int64(pack.AmountCents), pack.Credits, payment.ProviderOKXUSDT,
+			quote.Chain, quote.Address, quote.Amount, quote.AmountMicro, quote.Rate, quote.ExpiresAt)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"order": order})
+		return
+	}
+
+	if custom {
+		order, err = s.store.CreateCustomOrder(r.Context(), org.ID, req.AmountCents)
+	} else {
 		order, err = s.store.CreateOrder(r.Context(), org.ID, req.SKU)
 	}
 	if err != nil {

@@ -31,8 +31,22 @@ type Config struct {
 	XunhuQueryURL   string
 	XunhuNotifyURL  string
 	XunhuReturnURL  string
-	Environment     string
-	AdminEmails     []string
+	// USDT paid straight into the operator's own OKX deposit address. Each
+	// chain has its own address; the console quotes an exact amount per order
+	// and reconciles deposits through the OKX asset API when credentials are
+	// present. Without credentials the channel falls back to manual settlement.
+	OKXUSDTAddressTRC20   string
+	OKXUSDTAddressERC20   string
+	OKXUSDTAddressPolygon string
+	OKXUSDTCNYRate        float64
+	OKXUSDTOrderTTL       time.Duration
+	OKXUSDTAllowEmails    []string
+	OKXAPIKey             string
+	OKXAPISecret          string
+	OKXAPIPassphrase      string
+	OKXAPIBase            string
+	Environment           string
+	AdminEmails           []string
 	// PaymentOrderTTL expires unpaid orders after this window so an abandoned
 	// checkout cannot sit in the order list forever.
 	PaymentOrderTTL   time.Duration
@@ -76,28 +90,38 @@ func Load() Config {
 		}
 	}
 	return Config{
-		Port:              get("PORT", "8080"),
-		MetricsListen:     get("METRICS_LISTEN", "127.0.0.1:9095"),
-		DatabaseURL:       get("DATABASE_URL", ""),
-		SupabaseURL:       strings.TrimRight(get("SUPABASE_URL", ""), "/"),
-		SupabaseAnonKey:   get("SUPABASE_ANON_KEY", ""),
-		SupabaseDialIP:    get("SUPABASE_DIAL_IP", ""),
-		PublicBaseURL:     strings.TrimRight(get("PUBLIC_BASE_URL", "http://127.0.0.1:8080"), "/"),
-		ConsoleOrigin:     get("CONSOLE_ORIGIN", "http://127.0.0.1:5173"),
-		ServiceSecret:     get("SERVICE_SECRET", "change-me"),
-		ServiceSecrets:    secrets,
-		XunhuAppID:        get("XUNHUPAY_APPID", ""),
-		XunhuAppSecret:    get("XUNHUPAY_APPSECRET", ""),
-		XunhuAPIBase:      get("XUNHUPAY_API_BASE", "https://api.xunhupay.com/payment/do.html"),
-		XunhuQueryURL:     get("XUNHUPAY_QUERY_URL", "https://api.xunhupay.com/payment/query.html"),
-		XunhuNotifyURL:    get("XUNHUPAY_NOTIFY_URL", ""),
-		XunhuReturnURL:    get("XUNHUPAY_RETURN_URL", ""),
-		Environment:       get("APP_ENV", "development"),
-		PaymentOrderTTL:   getDuration("PAYMENT_ORDER_TTL", 2*time.Hour),
-		RatePaymentNotify: getInt("RATE_PAYMENT_NOTIFY_PER_MIN", 120),
-		RateOIDCToken:     getInt("RATE_OIDC_TOKEN_PER_MIN", 60),
-		RateProductToken:  getInt("RATE_PRODUCT_TOKEN_PER_MIN", 5),
-		AdminEmails:       splitCSV(get("ADMIN_EMAILS", "")),
+		Port:                  get("PORT", "8080"),
+		MetricsListen:         get("METRICS_LISTEN", "127.0.0.1:9095"),
+		DatabaseURL:           get("DATABASE_URL", ""),
+		SupabaseURL:           strings.TrimRight(get("SUPABASE_URL", ""), "/"),
+		SupabaseAnonKey:       get("SUPABASE_ANON_KEY", ""),
+		SupabaseDialIP:        get("SUPABASE_DIAL_IP", ""),
+		PublicBaseURL:         strings.TrimRight(get("PUBLIC_BASE_URL", "http://127.0.0.1:8080"), "/"),
+		ConsoleOrigin:         get("CONSOLE_ORIGIN", "http://127.0.0.1:5173"),
+		ServiceSecret:         get("SERVICE_SECRET", "change-me"),
+		ServiceSecrets:        secrets,
+		XunhuAppID:            get("XUNHUPAY_APPID", ""),
+		XunhuAppSecret:        get("XUNHUPAY_APPSECRET", ""),
+		XunhuAPIBase:          get("XUNHUPAY_API_BASE", "https://api.xunhupay.com/payment/do.html"),
+		XunhuQueryURL:         get("XUNHUPAY_QUERY_URL", "https://api.xunhupay.com/payment/query.html"),
+		XunhuNotifyURL:        get("XUNHUPAY_NOTIFY_URL", ""),
+		XunhuReturnURL:        get("XUNHUPAY_RETURN_URL", ""),
+		OKXUSDTAddressTRC20:   strings.TrimSpace(get("OKX_USDT_ADDRESS_TRC20", "")),
+		OKXUSDTAddressERC20:   strings.TrimSpace(get("OKX_USDT_ADDRESS_ERC20", "")),
+		OKXUSDTAddressPolygon: strings.TrimSpace(get("OKX_USDT_ADDRESS_POLYGON", "")),
+		OKXUSDTCNYRate:        getFloat("OKX_USDT_CNY_RATE", 0),
+		OKXUSDTOrderTTL:       getDuration("OKX_USDT_ORDER_TTL", 30*time.Minute),
+		OKXUSDTAllowEmails:    splitCSV(get("OKX_USDT_ALLOW_EMAILS", "")),
+		OKXAPIKey:             get("OKX_API_KEY", ""),
+		OKXAPISecret:          get("OKX_API_SECRET", ""),
+		OKXAPIPassphrase:      get("OKX_API_PASSPHRASE", ""),
+		OKXAPIBase:            strings.TrimRight(get("OKX_API_BASE", "https://www.okx.com"), "/"),
+		Environment:           get("APP_ENV", "development"),
+		PaymentOrderTTL:       getDuration("PAYMENT_ORDER_TTL", 2*time.Hour),
+		RatePaymentNotify:     getInt("RATE_PAYMENT_NOTIFY_PER_MIN", 120),
+		RateOIDCToken:         getInt("RATE_OIDC_TOKEN_PER_MIN", 60),
+		RateProductToken:      getInt("RATE_PRODUCT_TOKEN_PER_MIN", 5),
+		AdminEmails:           splitCSV(get("ADMIN_EMAILS", "")),
 
 		ReferralInviterCredits: getInt64("REFERRAL_INVITER_CREDITS", DefaultReferralInviterCredits),
 		ReferralInviteeCredits: getInt64("REFERRAL_INVITEE_CREDITS", DefaultReferralInviteeCredits),
@@ -123,6 +147,18 @@ func getDuration(k string, d time.Duration) time.Duration {
 	}
 	parsed, err := time.ParseDuration(raw)
 	if err != nil || parsed <= 0 {
+		return d
+	}
+	return parsed
+}
+
+func getFloat(k string, d float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(k))
+	if raw == "" {
+		return d
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil || parsed < 0 {
 		return d
 	}
 	return parsed
@@ -155,6 +191,14 @@ func getInt64(k string, d int64) int64 {
 		return d
 	}
 	return n
+}
+
+// OKXUSDTConfigured reports whether the direct USDT channel can take orders.
+// A positive CNY/USDT rate is required: without it the console cannot quote the
+// amount to send, which is the only thing matching relies on.
+func (c Config) OKXUSDTConfigured() bool {
+	return c.OKXUSDTCNYRate > 0 &&
+		(c.OKXUSDTAddressTRC20 != "" || c.OKXUSDTAddressERC20 != "" || c.OKXUSDTAddressPolygon != "")
 }
 
 func (c Config) PaymentConfigured() bool {

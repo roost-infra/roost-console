@@ -54,3 +54,43 @@ staging 时按需覆盖，均为公开值不是 secret）：
 - `CAUSAL_MEMORY_MCP_URL=https://causal-memory.com/memory/mcp`
 
 当前使用路径式部署，不依赖新 DNS。
+
+## USDT 直付（收款到自己的 OKX 地址）
+
+没有支付网关：控制台按汇率算出一笔**唯一金额**，用户往我们的 OKX 充币地址转账，
+后端定时用 OKX API 拉入账记录、按「链 + 金额」匹配订单并自动入账。
+
+最低配置（只有地址和汇率也能收款，入账由管理员手动确认）：
+
+```bash
+# 每条链一个充币地址，只填需要开放的链
+OKX_USDT_ADDRESS_TRC20=T...
+OKX_USDT_ADDRESS_ERC20=0x...
+OKX_USDT_ADDRESS_POLYGON=0x...
+# 报价用的 CNY/USDT 汇率；改了立即影响下一笔订单
+OKX_USDT_CNY_RATE=7.20
+# 可选：报价有效期（默认 30m）、只对某些账号开放
+OKX_USDT_ORDER_TTL=30m
+OKX_USDT_ALLOW_EMAILS=
+```
+
+自动入账还需要一个**只读**的 OKX API Key（资产-充值查询权限）：
+
+```bash
+OKX_API_KEY=...
+OKX_API_SECRET=...
+OKX_API_PASSPHRASE=...
+# 境外站默认 https://www.okx.com；OKX 其它区域站按需覆盖
+OKX_API_BASE=https://www.okx.com
+```
+
+工作方式与注意事项：
+
+- 每笔订单加一个随机尾数保证金额唯一（如 `13.8801`），这是同一地址能被区分的原因；
+  订单未支付时该金额不会被重复分配。
+- 匹配条件是「链 + 金额完全一致 + 入账时间晚于下单时间」。
+  用户从交易所提现时若**扣除手续费**，到账金额会少，自动匹配不会命中，
+  需管理员按 `## 支付运维` 的手动补单接口处理。
+- 后台每 60 秒拉一次 OKX 入账记录（一次请求覆盖所有待支付订单），
+  订单超过 `OKX_USDT_ORDER_TTL` 未支付会置为 expired。
+- USDT 订单不走虎皮椒；账本、积分、发票口径与其它渠道一致（`billing.orders.provider = okx_usdt`）。

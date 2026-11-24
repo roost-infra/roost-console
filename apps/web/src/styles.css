@@ -553,3 +553,23 @@ a.product-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lif
 .link-btn { margin-left: 6px; padding: 0; border: 0; background: none; color: var(--accent-ink); font-size: inherit; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
 .balance__stats-error { margin: 8px 0 4px; font-size: 13px; }
 .snippet__code:focus-visible, .seg__btn:focus-visible, .nav-item:focus-visible, .btn:focus-visible, .copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Direct-USDT checkout */
+.recharge-head { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.recharge-channel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.recharge-chain .seg__btn { font-family: var(--mono); font-size: 12px; }
+.usdt-pay { display: grid; gap: 12px; margin: 18px 0 4px; padding: 16px; border: 1px solid var(--accent-soft); border-radius: 14px; background: var(--accent-soft); }
+.usdt-pay__row { display: flex; align-items: center; justify-content: space-between; }
+.usdt-pay__label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.usdt-pay__amount { display: flex; align-items: baseline; gap: 8px; }
+.usdt-pay__amount strong { font-family: var(--mono); font-size: 26px; font-weight: 700; color: var(--ink); }
+.usdt-pay__unit { font-size: 12px; font-weight: 600; color: var(--muted); }
+.usdt-pay__amount .copy-btn { margin-left: auto; }
+.usdt-pay__address { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .85); }
+.usdt-pay__address code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; color: var(--ink); }
+.usdt-pay__hint { margin: 0; font-size: 12px; line-height: 1.7; color: var(--ink-2); }
+.usdt-pay__timer { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--accent-ink); }
+
+@media (max-width: 980px) {
+  .recharge-head { align-items: flex-start; }
+}

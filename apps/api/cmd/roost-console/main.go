@@ -43,7 +43,7 @@ func supabaseHTTPClient(cfg config.Config) *http.Client {
 // against the provider. A webhook alone is not a delivery guarantee: if the
 // notify is lost or rejected the order must still be fulfilled, and an
 // abandoned checkout must not read as "in progress" forever.
-func startPaymentJobs(ctx context.Context, cfg config.Config, store *billing.Store, pay *payment.Client, log *slog.Logger) {
+func startPaymentJobs(ctx context.Context, cfg config.Config, store *billing.Store, pay *payment.Client, usdt *payment.OKXUSDT, log *slog.Logger) {
 	if store == nil {
 		return
 	}
@@ -55,6 +55,16 @@ func startPaymentJobs(ctx context.Context, cfg config.Config, store *billing.Sto
 			// be fulfilled while it can still be queried, not closed as stale.
 			if cfg.PaymentConfigured() {
 				reconcileOrders(runCtx, store, pay, log)
+			}
+			// Direct USDT has no callback at all: deposits are found by asking
+			// OKX what landed on our address, then matched to open quotes.
+			if usdt != nil && usdt.Configured() {
+				reconcileUSDTDeposits(runCtx, store, usdt, log)
+				if n, err := store.ExpireStaleUSDTOrders(runCtx, payment.ProviderOKXUSDT, cfg.OKXUSDTOrderTTL); err != nil {
+					log.Warn("usdt order expiry failed", "err", err)
+				} else if n > 0 {
+					log.Info("expired stale usdt orders", "count", n)
+				}
 			}
 			if n, err := store.ExpireStaleOrders(runCtx, cfg.PaymentOrderTTL); err != nil {
 				log.Warn("order expiry failed", "err", err)
@@ -150,8 +160,9 @@ func main() {
 		QueryURL:  cfg.XunhuQueryURL,
 		NotifyURL: cfg.XunhuNotifyURL, ReturnURL: cfg.XunhuReturnURL, HTTP: &http.Client{Timeout: 20 * time.Second},
 	}
+	usdt := okxUSDTChannel(cfg)
 	srv := httpapi.New(cfg, store, verifier, pay, log)
-	startPaymentJobs(context.Background(), cfg, store, pay, log)
+	startPaymentJobs(context.Background(), cfg, store, pay, usdt, log)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -201,4 +212,105 @@ func main() {
 	if metricsServer != nil {
 		_ = metricsServer.Shutdown(shutdown)
 	}
+}
+
+// okxUSDTChannel builds the direct-USDT channel from the environment.
+func okxUSDTChannel(cfg config.Config) *payment.OKXUSDT {
+	if !cfg.OKXUSDTConfigured() {
+		return nil
+	}
+	return &payment.OKXUSDT{
+		Addresses: map[string]string{
+			payment.ChainTRC20:   cfg.OKXUSDTAddressTRC20,
+			payment.ChainERC20:   cfg.OKXUSDTAddressERC20,
+			payment.ChainPolygon: cfg.OKXUSDTAddressPolygon,
+		},
+		Rate:     cfg.OKXUSDTCNYRate,
+		OrderTTL: cfg.OKXUSDTOrderTTL,
+		Client: &payment.OKXClient{
+			BaseURL:    cfg.OKXAPIBase,
+			Key:        cfg.OKXAPIKey,
+			Secret:     cfg.OKXAPISecret,
+			Passphrase: cfg.OKXAPIPassphrase,
+			ChainCodes: map[string]string{
+				payment.ChainTRC20:   "TRC20",
+				payment.ChainERC20:   "ERC20",
+				payment.ChainPolygon: "Polygon",
+			},
+		},
+	}
+}
+
+// reconcileUSDTDeposits fulfils USDT orders whose deposit landed on our
+// address. It asks OKX once per tick for everything after the oldest open
+// order and matches in memory, so N open orders cost one API call.
+func reconcileUSDTDeposits(ctx context.Context, store *billing.Store, usdt *payment.OKXUSDT, log *slog.Logger) {
+	if store == nil || usdt == nil || !usdt.AutoConfirm() {
+		return
+	}
+	orders, err := store.PendingUSDTOrders(ctx, payment.ProviderOKXUSDT, 100)
+	if err != nil {
+		log.Warn("usdt reconcile list failed", "err", err)
+		return
+	}
+	if len(orders) == 0 {
+		return
+	}
+	open := make([]payment.OpenUSDTOrder, 0, len(orders))
+	since := time.Now().Add(-24 * time.Hour)
+	for _, o := range orders {
+		if o.USDT == nil {
+			continue
+		}
+		if o.CreatedAt.Before(since) {
+			since = o.CreatedAt
+		}
+		open = append(open, payment.OpenUSDTOrder{
+			OrderID:     o.ID,
+			Chain:       o.USDT.Chain,
+			AmountMicro: o.USDT.AmountMicro,
+			CreatedAt:   o.CreatedAt,
+			ExpiresAt:   o.USDT.ExpiresAt,
+		})
+	}
+	if len(open) == 0 {
+		return
+	}
+	deposits, err := usdt.Client.Deposits(ctx, since.Add(-time.Hour))
+	if err != nil {
+		log.Warn("usdt deposit fetch failed", "err", err)
+		return
+	}
+	for _, match := range usdt.MatchDeposits(open, deposits) {
+		order, ok := findByID(orders, match.OrderID)
+		if !ok {
+			continue
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"usdt_deposit_id":   match.DepositID,
+			"usdt_tx_id":        match.TxID,
+			"usdt_chain":        match.Chain,
+			"usdt_amount_micro": match.AmountMicro,
+			"usdt_at":           match.At.UTC().Format(time.RFC3339),
+		})
+		tradeNo := "okx_" + match.DepositID
+		if match.DepositID == "" {
+			tradeNo = "okx_" + match.TxID
+		}
+		if err := store.Fulfill(ctx, order.ID, tradeNo, order.AmountCents, raw); err != nil {
+			log.Error("usdt fulfill failed", "order", order.ID, "err", err)
+			continue
+		}
+		log.Info("usdt order fulfilled", "order", order.ID, "deposit", match.DepositID,
+			"chain", match.Chain, "amount", payment.FormatMicro(match.AmountMicro))
+	}
+}
+
+func findByID(orders []billing.Order, id string) (billing.Order, bool) {
+	for _, o := range orders {
+		if o.ID == id {
+			return o, true
+		}
+	}
+	return billing.Order{}, false
 }

@@ -305,10 +305,12 @@ func (s *Store) AttachPayment(ctx context.Context, orderID, providerOrderID, qrU
 
 func (s *Store) GetOrder(ctx context.Context, orgID, orderID string) (Order, error) {
 	var o Order
+	var raw []byte
 	err := s.Pool.QueryRow(ctx, `
-		select id,org_id,out_trade_no,sku,amount_cents,credits,status,coalesce(qr_url,''),coalesce(pay_url,''),paid_at,created_at
+		select id,org_id,out_trade_no,sku,amount_cents,credits,status,coalesce(qr_url,''),coalesce(pay_url,''),provider,raw,paid_at,created_at
 		from billing.orders where id=$1 and org_id=$2`, orderID, orgID).
-		Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.QRURL, &o.PayURL, &o.PaidAt, &o.CreatedAt)
+		Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.QRURL, &o.PayURL, &o.Provider, &raw, &o.PaidAt, &o.CreatedAt)
+	o.USDT = usdtFromRaw(raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, ErrNotFound
 	}
@@ -552,4 +554,155 @@ func (s *Store) GetOrderByID(ctx context.Context, orderID string) (Order, error)
 		return Order{}, ErrNotFound
 	}
 	return o, err
+}
+
+// CreateUSDTOrder persists an order that will be paid in USDT to the operator's
+// deposit address. The quote lives in raw so reconciliation and the console
+// read the same numbers; the unique amount is what makes a shared address
+// reconcilable, so the caller passes an amount no other open order holds.
+func (s *Store) CreateUSDTOrder(ctx context.Context, orgID, sku string, amountCents, credits int64, provider, chain, address, amount string, amountMicro int64, rate float64, expiresAt time.Time) (Order, error) {
+	if amountCents <= 0 || credits < 0 {
+		return Order{}, ErrAddonNotEligible
+	}
+	raw, err := json.Marshal(map[string]any{
+		"usdt_chain":        chain,
+		"usdt_address":      address,
+		"usdt_amount":       amount,
+		"usdt_amount_micro": amountMicro,
+		"usdt_rate":         rate,
+		"usdt_expires_at":   expiresAt.UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return Order{}, err
+	}
+	var o Order
+	err = s.Pool.QueryRow(ctx, `
+		insert into billing.orders (org_id,out_trade_no,sku,amount_cents,credits,status,provider,raw)
+		values ($1,$2,$3,$4,$5,'pending',$6,$7)
+		returning id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,created_at`,
+		orgID, randomTradeNo(), sku, amountCents, credits, provider, raw,
+	).Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &o.CreatedAt)
+	if err != nil {
+		return Order{}, err
+	}
+	o.USDT = &USDTInstruction{
+		Chain:       chain,
+		Address:     address,
+		Amount:      amount,
+		AmountMicro: amountMicro,
+		Rate:        rate,
+		ExpiresAt:   expiresAt.UTC(),
+	}
+	return o, nil
+}
+
+// USDTInstruction is the payment detail shown for a direct-USDT order.
+type USDTInstruction struct {
+	Chain       string    `json:"chain"`
+	Address     string    `json:"address"`
+	Amount      string    `json:"amount"`
+	AmountMicro int64     `json:"-"`
+	Rate        float64   `json:"rate"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+// openUSDTOrder loads a pending USDT order together with its stored quote.
+func (s *Store) openUSDTOrder(ctx context.Context, orderID string) (Order, error) {
+	var o Order
+	var raw []byte
+	err := s.Pool.QueryRow(ctx, `
+		select id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,raw,created_at
+		from billing.orders where id=$1`, orderID).
+		Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &raw, &o.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Order{}, ErrNotFound
+	}
+	if err != nil {
+		return Order{}, err
+	}
+	o.USDT = usdtFromRaw(raw)
+	return o, nil
+}
+
+func usdtFromRaw(raw []byte) *USDTInstruction {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload struct {
+		Chain       string  `json:"usdt_chain"`
+		Address     string  `json:"usdt_address"`
+		Amount      string  `json:"usdt_amount"`
+		AmountMicro int64   `json:"usdt_amount_micro"`
+		Rate        float64 `json:"usdt_rate"`
+		ExpiresAt   string  `json:"usdt_expires_at"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.Address == "" {
+		return nil
+	}
+	expires, _ := time.Parse(time.RFC3339, payload.ExpiresAt)
+	return &USDTInstruction{
+		Chain:       payload.Chain,
+		Address:     payload.Address,
+		Amount:      payload.Amount,
+		AmountMicro: payload.AmountMicro,
+		Rate:        payload.Rate,
+		ExpiresAt:   expires,
+	}
+}
+
+// PendingUSDTOrders lists unpaid USDT orders that reconciliation may settle.
+func (s *Store) PendingUSDTOrders(ctx context.Context, provider string, limit int) ([]Order, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.Pool.Query(ctx, `
+		select id,org_id,out_trade_no,sku,amount_cents,credits,status,provider,raw,created_at
+		from billing.orders
+		where status='pending' and provider=$1 and created_at > now() - interval '24 hours'
+		order by created_at
+		limit $2`, provider, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Order, 0, limit)
+	for rows.Next() {
+		var o Order
+		var raw []byte
+		if err := rows.Scan(&o.ID, &o.OrgID, &o.OutTradeNo, &o.SKU, &o.AmountCents, &o.Credits, &o.Status, &o.Provider, &raw, &o.CreatedAt); err != nil {
+			return nil, err
+		}
+		o.USDT = usdtFromRaw(raw)
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// USDTAmountInUse reports whether an unpaid USDT order already quotes this
+// exact amount on this chain; quotes must be unique to be matchable.
+func (s *Store) USDTAmountInUse(ctx context.Context, provider, chain, amount string) (bool, error) {
+	var exists bool
+	err := s.Pool.QueryRow(ctx, `
+		select exists(
+			select 1 from billing.orders
+			where provider=$1 and status in ('created','pending')
+			  and raw->>'usdt_chain'=$2 and raw->>'usdt_amount'=$3)`,
+		provider, chain, amount).Scan(&exists)
+	return exists, err
+}
+
+// ExpireStaleUSDTOrders closes USDT orders whose quote has expired.
+func (s *Store) ExpireStaleUSDTOrders(ctx context.Context, provider string, olderThan time.Duration) (int64, error) {
+	if olderThan <= 0 {
+		olderThan = 30 * time.Minute
+	}
+	tag, err := s.Pool.Exec(ctx, `
+		update billing.orders
+		set status='expired', updated_at=now()
+		where status in ('created','pending') and provider=$1
+		  and created_at < now() - make_interval(secs => $2)`, provider, olderThan.Seconds())
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

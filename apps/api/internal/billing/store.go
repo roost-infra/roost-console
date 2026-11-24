@@ -65,18 +65,20 @@ type BillingView struct {
 }
 
 type Order struct {
-	ID              string     `json:"id"`
-	OrgID           string     `json:"org_id"`
-	OutTradeNo      string     `json:"out_trade_no"`
-	SKU             string     `json:"sku"`
-	AmountCents     int        `json:"amount_cents"`
-	Credits         int64      `json:"credits"`
-	Status          string     `json:"status"`
-	QRURL           string     `json:"qr_url,omitempty"`
-	PayURL          string     `json:"pay_url,omitempty"`
-	ProviderOrderID string     `json:"-"`
-	PaidAt          *time.Time `json:"paid_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
+	ID              string           `json:"id"`
+	OrgID           string           `json:"org_id"`
+	OutTradeNo      string           `json:"out_trade_no"`
+	SKU             string           `json:"sku"`
+	AmountCents     int              `json:"amount_cents"`
+	Credits         int64            `json:"credits"`
+	Status          string           `json:"status"`
+	QRURL           string           `json:"qr_url,omitempty"`
+	PayURL          string           `json:"pay_url,omitempty"`
+	Provider        string           `json:"provider,omitempty"`
+	USDT            *USDTInstruction `json:"usdt,omitempty"`
+	ProviderOrderID string           `json:"-"`
+	PaidAt          *time.Time       `json:"paid_at,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
 }
 
 type Lease struct {
