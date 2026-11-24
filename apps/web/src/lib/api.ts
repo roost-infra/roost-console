@@ -100,9 +100,10 @@ export interface Order {
 const API = (import.meta.env.VITE_API_URL as string | undefined) ?? '';
 
 async function request<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const timeout = AbortSignal.timeout(15000);
   const response = await fetch(`${API}${path}`, {
     ...init,
-    signal: init?.signal ?? AbortSignal.timeout(15000),
+    signal: init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -418,6 +419,7 @@ export interface UsageRecentRow {
   user_share_tokens: number;
   user_share_minor: number;
   compression_applied: boolean;
+  summary_cost_minor: number;
   original_input_tokens: number;
   compressed_input_tokens: number;
 }
@@ -427,7 +429,53 @@ export interface UsageRecentResponse {
   limit: number;
 }
 
+export interface RelayPreferences {
+  compression_enabled: boolean | null;
+  compression_percent: number | null;
+  memory_enabled: boolean | null;
+}
+
+interface RelayPreferenceSet {
+  personal: RelayPreferences;
+  organization: RelayPreferences;
+  effective: RelayPreferences;
+}
+
+export interface RelayMemory {
+  id: string;
+  body: string;
+  source: 'manual' | 'model';
+  request_id?: string;
+  version: number;
+  updated_at: string;
+}
+
+export interface MemoryActivity {
+  id: number;
+  request_id: string;
+  phase: 'search' | 'match' | 'write';
+  status: string;
+  memory_ids: string[];
+  created_at: string;
+}
+
+const relayControlPath = (orgId: string) => '/v1/orgs/' + encodeURIComponent(orgId) + '/relay';
+
 export const api = {
+  relayPreferences: (token: string, orgId: string, signal?: AbortSignal) =>
+    request<RelayPreferenceSet>(relayControlPath(orgId) + '/preferences', token, { signal }),
+  saveRelayPreferences: (token: string, orgId: string, scope: 'personal' | 'organization', values: RelayPreferences) =>
+    request<RelayPreferenceSet>(relayControlPath(orgId) + '/preferences/' + scope, token, { method: 'PUT', body: JSON.stringify(values) }),
+  relayMemories: (token: string, orgId: string, query: string, offset: number, signal?: AbortSignal) =>
+    request<{ items: RelayMemory[]; more: boolean }>(relayControlPath(orgId) + '/memories?q=' + encodeURIComponent(query) + '&offset=' + offset, token, { signal }),
+  saveRelayMemory: (token: string, orgId: string, item: { id?: string; body: string; version?: number }) =>
+    request<RelayMemory>(relayControlPath(orgId) + '/memories' + (item.id ? '/' + encodeURIComponent(item.id) : ''), token, {
+      method: item.id ? 'PUT' : 'POST', body: JSON.stringify({ body: item.body, version: item.version }),
+    }),
+  deleteRelayMemory: (token: string, orgId: string, ids: string[], all: boolean) =>
+    request<{ deleted: number }>(relayControlPath(orgId) + '/memories/delete', token, { method: 'POST', body: JSON.stringify({ ids, all }) }),
+  relayMemoryActivity: (token: string, orgId: string, after: number, signal?: AbortSignal) =>
+    request<MemoryActivity[]>(relayControlPath(orgId) + '/memory-events?after=' + after, token, { signal }),
   me: (token: string) => request<MeResponse>('/v1/me', token),
   plans: (token: string) => request<{ plans: Plan[] }>('/v1/billing/plans', token),
   createOrder: (token: string, sku: string, amountCents?: number) =>

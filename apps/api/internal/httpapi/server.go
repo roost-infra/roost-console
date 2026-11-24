@@ -144,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/referral", s.withUser(s.referralOverview))
 	mux.HandleFunc("POST /v1/referral/claim", s.withUser(s.rateLimit("referral_claim", s.cfg.RateReferralClaim, s.userKey, s.claimReferral)))
 	mux.HandleFunc("GET /v1/orgs/{orgID}/billing", s.withUser(s.billingView))
+	s.relayControlRoutes(mux)
 	mux.HandleFunc("GET /v1/orgs/{orgID}/billing/compression", s.withUser(s.orgCompressionUsage))
 	mux.HandleFunc("GET /v1/orgs/{orgID}/billing/details", s.withUser(s.orgBillingDetails))
 	mux.HandleFunc("GET /v1/orgs/{orgID}/usage/summary", s.withUser(s.orgUsageSummary))
@@ -298,7 +299,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization,Content-Type,X-Requested-With")
-			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
