@@ -38,7 +38,7 @@
 每个应用必须自己兑换：
 
 - console：`apps/web/src/lib/emailConfirm.ts`（`verifyOtp` 后清掉 URL 参数）
-- dslalpha：`web/src/pages/Login/AuthConfirm.tsx`（已有）
+- dsalpha：`web/src/pages/Login/AuthConfirm.tsx`（已有）
 - 桌面端：`withShellReturn` 依赖 `.RedirectTo` 才会带上 `/desktop` 段
 
 ## 应用模板（Management API）
