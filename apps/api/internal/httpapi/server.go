@@ -1207,7 +1207,7 @@ func (s *Server) compatValidate(w http.ResponseWriter, r *http.Request) {
 	scopes = append(scopes, specScopes(e.PlanCode)...)
 
 	// Elevated computer sizes are scope-gated, not credit-gated. The Console
-	// plan owns which sizes exist; dslalpha enforces them through these scopes
+	// plan owns which sizes exist; dsalpha enforces them through these scopes
 	// and the spec_* count quota names. A missing scope is why every paid plan
 	// looked like Small-only in the picker.
 	if isSpecQuota(req.CheckQuota) {
