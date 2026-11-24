@@ -100,6 +100,7 @@ type UsageRecentRow struct {
 	SavedTokens           int64     `json:"saved_tokens"`
 	UserShareTokens       int64     `json:"user_share_tokens"`
 	UserShareMinor        int64     `json:"user_share_minor"`
+	SummaryCostMinor      int64     `json:"summary_cost_minor"`
 	CompressionApplied    bool      `json:"compression_applied"`
 	OriginalInputTokens   int64     `json:"original_input_tokens"`
 	CompressedInputTokens int64     `json:"compressed_input_tokens"`
@@ -385,6 +386,7 @@ func (s *Store) UsageRecent(ctx context.Context, orgID string, limit int) ([]Usa
 		       coalesce(c.saved_tokens,0),
 		       coalesce(c.user_share_tokens,0),
 		       coalesce(c.user_share_minor,0),
+		       coalesce(c.summary_cost_minor,0),
 		       coalesce((select sum(abs(l.delta_credits))
 		                 from billing.ledger l
 		                 where l.org_id=ue.org_id and l.product='relay'
@@ -405,7 +407,7 @@ func (s *Store) UsageRecent(ctx context.Context, orgID string, limit int) ([]Usa
 		if err := rows.Scan(&row.CreatedAt, &row.Model, &row.RequestID, &row.Requests,
 			&row.InputTokens, &row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens,
 			&row.CompressionApplied, &row.OriginalInputTokens, &row.CompressedInputTokens,
-			&row.SavedTokens, &row.UserShareTokens, &row.UserShareMinor, &row.CreditsMinor); err != nil {
+			&row.SavedTokens, &row.UserShareTokens, &row.UserShareMinor, &row.SummaryCostMinor, &row.CreditsMinor); err != nil {
 			return nil, err
 		}
 		row.TotalTokens = row.InputTokens + row.OutputTokens + row.CacheReadTokens + row.CacheWriteTokens

@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase';
 import { redeemEmailTokenHash } from './lib/emailConfirm';
 import { CopyButton, CopyField, DSALPHA_URL, EndpointList, KeyCreatedModal, MEMORY_MCP_URL, MODELS_URL, RELAY_BASE_URL, SnippetTabs } from './access';
 import { Brand, Icon, Sidebar, Topbar, useRoute } from './shell';
+import { ControlMemory, RelayControls } from './ControlMemory';
 import { api, type AdminOrg, type AdminOverview, type AdminOverviewDaily, type AdminReferrals, type BillingDetails, type BillingSandboxRow, type BillingTokenRow, type BillingView, type MeResponse, type Order, type Plan, type ReferralOverview, type RelayKey, type UsageDailyRow, type UsageRecentRow, type UsageSessionRow, type UsageTotals } from './lib/api';
 
 const PRODUCT_LABELS: Record<string, string> = {
@@ -1263,12 +1264,13 @@ function UsageDashboard({ token, orgId }: { token: string; orgId: string }) {
                 <span className="usage-sub">{minorYuan(row.credits_minor)}</span>
               </span>
               <span className="usage-compression">
-                {(row.compression_applied || row.original_input_tokens > 0) ? (
+                {row.compression_applied ? (
                   <>
                     <span className="mono">{credits(row.original_input_tokens)} → {credits(row.compressed_input_tokens)}</span>
-                    <span className="usage-sub">+{credits(row.saved_tokens)} saved · 分给你 {credits(row.user_share_tokens)} tokens / {minorCredits(row.user_share_minor)} credits</span>
+                    <span className="usage-sub">节省 {credits(row.saved_tokens)} tokens · 分给你 {credits(row.user_share_tokens)} tokens / {minorCredits(row.user_share_minor)} credits</span>
+                    <span className="usage-sub">摘要费 {minorCredits(row.summary_cost_minor)} credits（已含）</span>
                   </>
-                ) : <span className="muted">—</span>}
+                ) : <span className="muted">未压缩</span>}
               </span>
             </div>
           ))}
@@ -2545,13 +2547,13 @@ function Console({ session }: { session: Session }) {
   let body: ReactNode;
   switch (page) {
     case 'keys':
-      body = <RelayKeys token={token} orgId={me.org.id} />;
+      body = <><RelayControls key={me.org.id} token={token} orgId={me.org.id} admin={['owner', 'admin'].includes(me.org.role)} /><RelayKeys token={token} orgId={me.org.id} /></>;
       break;
     case 'usage':
       body = <UsageDashboard token={token} orgId={me.org.id} />;
       break;
     case 'memory':
-      body = <CausalMemory token={token} orgId={me.org.id} />;
+      body = <><ControlMemory key={me.org.id} token={token} orgId={me.org.id} /><CausalMemory token={token} orgId={me.org.id} /></>;
       break;
     case 'dsalpha':
       body = (
