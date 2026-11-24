@@ -156,6 +156,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/referral", s.withUser(s.referralOverview))
 	mux.HandleFunc("POST /v1/referral/claim", s.withUser(s.rateLimit("referral_claim", s.cfg.RateReferralClaim, s.userKey, s.claimReferral)))
 	mux.HandleFunc("GET /v1/orgs/{orgID}/billing", s.withUser(s.billingView))
+	s.relayControlRoutes(mux)
 	mux.HandleFunc("GET /v1/orgs/{orgID}/billing/compression", s.withUser(s.orgCompressionUsage))
 	mux.HandleFunc("GET /v1/orgs/{orgID}/billing/details", s.withUser(s.orgBillingDetails))
 	mux.HandleFunc("GET /v1/orgs/{orgID}/usage/summary", s.withUser(s.orgUsageSummary))
