@@ -59,7 +59,10 @@ export async function copyText(text: string): Promise<boolean> {
 export function CopyButton({ text, label = '复制', className = '' }: { text: string; label?: string; className?: string }) {
   const [state, setState] = useState<'idle' | 'ok' | 'fail'>('idle');
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   async function onClick() {
     const ok = await copyText(text);
     if (!mounted.current) return;

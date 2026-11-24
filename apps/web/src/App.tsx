@@ -486,18 +486,30 @@ function Overview({ me, token }: { me: MeResponse; token: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  // Every key-list read takes a fresh sequence number; only the newest may write.
+  const keysSeq = useRef(0);
+  const readKeys = useCallback(async () => {
+    const seq = ++keysSeq.current;
+    try {
+      const data = await api.relayKeys(token, orgId);
+      if (seq !== keysSeq.current) return;
+      setKeys((data.tokens ?? []).filter((k) => !k.revoked_at));
+      setKeysFailed(false);
+    } catch {
+      if (seq === keysSeq.current) setKeysFailed(true);
+    }
+  }, [token, orgId]);
+
   useEffect(() => {
     let cancelled = false;
     setKeysFailed(false);
     setWeekFailed(false);
-    api.relayKeys(token, orgId)
-      .then((data) => { if (!cancelled) setKeys((data.tokens ?? []).filter((k) => !k.revoked_at)); })
-      .catch(() => { if (!cancelled) setKeysFailed(true); });
+    void readKeys();
     api.usageSummary(token, orgId, 7)
       .then((data) => { if (!cancelled) setWeek(data.totals); })
       .catch(() => { if (!cancelled) setWeekFailed(true); });
-    return () => { cancelled = true; };
-  }, [token, orgId, reload]);
+    return () => { cancelled = true; keysSeq.current += 1; };
+  }, [token, orgId, reload, readKeys]);
 
   async function createKey() {
     setBusy(true);
@@ -505,13 +517,13 @@ function Overview({ me, token }: { me: MeResponse; token: string }) {
     try {
       const data = await api.createRelayKey(token, orgId);
       setCreated(data.token);
-      const list = await api.relayKeys(token, orgId);
-      setKeys((list.tokens ?? []).filter((k) => !k.revoked_at));
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建 API Key 失败');
-    } finally {
       setBusy(false);
+      return;
     }
+    setBusy(false);
+    await readKeys();
   }
 
   const wallet = me.billing.wallet;
@@ -1610,7 +1622,12 @@ function RelayKeys({ token, orgId }: { token: string; orgId: string }) {
           </button>
         </div>
         <p className="muted keys-note">Key 消费组织共享余额。完整 Key 只在创建时显示一次，列表里只保留指纹；泄露或丢失请吊销后重建。</p>
-        {error && <p className="form-error">{error}</p>}
+        {error && (
+          <p className="form-error">
+            {error}
+            <button className="link-btn" type="button" onClick={() => void load()} disabled={!!busy}>重试</button>
+          </p>
+        )}
         <div className="table table--keys">
           <div className="table__row table__row--head"><span>Key 指纹</span><span>创建时间</span><span>最近使用</span><span>状态</span><span /></div>
           {!loaded && <div className="table__empty">正在加载…</div>}
