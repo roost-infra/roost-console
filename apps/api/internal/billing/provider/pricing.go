@@ -28,10 +28,10 @@ var ErrInvalidQuote = errors.New("provider: invalid quote")
 
 // Price is a provider or retail price in micro-USD per 1,000,000 tokens.
 type Price struct {
-	Input      int64
-	Output     int64
-	CacheRead  int64
-	CacheWrite int64
+	Input      int64 `json:"input"`
+	Output     int64 `json:"output"`
+	CacheRead  int64 `json:"cache_read"`
+	CacheWrite int64 `json:"cache_write"`
 }
 
 // Tier prices up to MaxInput prompt tokens. MaxInput <= 0 means no upper bound
@@ -102,9 +102,10 @@ const (
 // Plan allocates a fixed subscription fee over its included usage allowance.
 // Both values are in micro-USD. A zero Plan leaves provider cost unallocated.
 type Plan struct {
-	CostMicros      int64
-	AllowanceMicros int64
-	Basis           PlanBasis
+	ID              string    `json:"id"`
+	CostMicros      int64     `json:"cost_micros"`
+	AllowanceMicros int64     `json:"allowance_micros"`
+	Basis           PlanBasis `json:"basis"`
 }
 
 // Request is one pricing input.
