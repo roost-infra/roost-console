@@ -38,7 +38,10 @@ type Price struct {
 // and is selected only when no positive tier matches.
 type Tier struct {
 	MaxInput int64
-	Price    Price
+	// Peak is an optional provider/label dimension ("高峰", "非高峰"). An empty
+	// value is the default, non-peak tier.
+	Peak  string
+	Price Price
 }
 
 // ModelPrices is the tier ladder for one model.
@@ -48,10 +51,22 @@ type ModelPrices []Tier
 // unbounded tier. The caller passes the prompt token count that the provider
 // (or product) uses for tier selection.
 func (m ModelPrices) TierFor(tokens int64) (Tier, error) {
+	return m.TierForPeak(tokens, "")
+}
+
+// TierForPeak selects the tier for a peak label, falling back to the default
+// (empty/非高峰) tier when the requested label has no dedicated row.
+func (m ModelPrices) TierForPeak(tokens int64, peak string) (Tier, error) {
 	var best *Tier
 	var unbounded *Tier
 	for i := range m {
 		t := &m[i]
+		if peak != "" && t.Peak != "" && t.Peak != peak {
+			continue
+		}
+		if peak == "" && t.Peak == "高峰" {
+			continue
+		}
 		if t.MaxInput <= 0 {
 			if unbounded == nil {
 				unbounded = t
@@ -110,8 +125,11 @@ type Plan struct {
 
 // Request is one pricing input.
 type Request struct {
-	Model   string
-	Usage   Usage
+	Model string
+	Usage Usage
+	// Peak selects a provider-declared peak tier ("高峰"). Empty uses the
+	// default/non-peak row.
+	Peak    string
 	PeakBPS int64
 }
 
@@ -178,11 +196,11 @@ func (c Calculator) Quote(req Request) (Quote, error) {
 		peak = DefaultPeakBPS
 	}
 
-	retailTier, err := retailTiers.TierFor(u.RetailTierInput)
+	retailTier, err := retailTiers.TierForPeak(u.RetailTierInput, req.Peak)
 	if err != nil {
 		return Quote{}, err
 	}
-	providerTier, err := costTiers.TierFor(u.ProviderTierInput)
+	providerTier, err := costTiers.TierForPeak(u.ProviderTierInput, req.Peak)
 	if err != nil {
 		return Quote{}, err
 	}

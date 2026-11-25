@@ -943,6 +943,110 @@
         "cache_read": 500000,
         "cache_write": 0
       }
+    },
+    {
+      "model": "deepseek-v4-pro",
+      "tier": "标准",
+      "max_input": 0,
+      "peak": "高峰",
+      "provider": {
+        "input": 528000,
+        "output": 1580000,
+        "cache_read": 17600,
+        "cache_write": 0
+      },
+      "official": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "retail": {
+        "input": 1320000,
+        "output": 3950000,
+        "cache_read": 44000,
+        "cache_write": 0
+      }
+    }
+  ],
+  "images": [
+    {
+      "model": "deepseek-v4.1-flash-free",
+      "provider_micros": 0,
+      "retail_micros": 0
+    },
+    {
+      "model": "gpt-image-2.5",
+      "provider_micros": 10000,
+      "retail_micros": 25000
+    },
+    {
+      "model": "gpt-image-2.6-flare",
+      "provider_micros": 10000,
+      "retail_micros": 25000
+    },
+    {
+      "model": "gpt-image-2.6-sunburst",
+      "provider_micros": 10000,
+      "retail_micros": 25000
+    },
+    {
+      "model": "gpt-image-2-4k",
+      "provider_micros": 90000,
+      "retail_micros": 225000
+    },
+    {
+      "model": "gpt-image-2.5-flare",
+      "provider_micros": 20000,
+      "retail_micros": 50000
+    },
+    {
+      "model": "gpt-image-2.5-sunburst",
+      "provider_micros": 20000,
+      "retail_micros": 50000
+    },
+    {
+      "model": "gpt-image-2",
+      "provider_micros": 15000,
+      "retail_micros": 37500
+    }
+  ],
+  "videos": [
+    {
+      "model": "MiniMax-H3",
+      "tier": "720P 高峰",
+      "provider_micros": 29400,
+      "retail_micros": 73500
+    },
+    {
+      "model": "MiniMax-H3",
+      "tier": "720P 非高峰",
+      "provider_micros": 23500,
+      "retail_micros": 58750
+    },
+    {
+      "model": "MiniMax-H3",
+      "tier": "1080P",
+      "provider_micros": 58800,
+      "retail_micros": 147000
+    },
+    {
+      "model": "MiniMax-H3",
+      "tier": "2K",
+      "provider_micros": 88200,
+      "retail_micros": 220500
+    },
+    {
+      "model": "Seedance-2",
+      "tier": "720P",
+      "provider_micros": 102900,
+      "retail_micros": 257250
+    },
+    {
+      "model": "Seedance-2-5",
+      "tier": "720P",
+      "provider_micros": 220600,
+      "retail_micros": 551500
     }
   ]
 }

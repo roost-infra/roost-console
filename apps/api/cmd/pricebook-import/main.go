@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/JingxuanC/roost-console/apps/api/internal/billing/provider"
 	"github.com/JingxuanC/roost-console/apps/api/internal/db"
 )
@@ -125,11 +127,46 @@ func main() {
 			}
 		}
 	}
+
+	for _, u := range doc.Images {
+		if err := upsertUnit(ctx, tx, doc.Version, *providerID, u, "image", ""); err != nil {
+			log.Error("upsert image", "model", u.Model, "err", err)
+			os.Exit(1)
+		}
+	}
+	for _, u := range doc.Videos {
+		if err := upsertUnit(ctx, tx, doc.Version, *providerID, u, "video_second", u.Tier); err != nil {
+			log.Error("upsert video", "model", u.Model, "tier", u.Tier, "err", err)
+			os.Exit(1)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		log.Error("commit", "err", err)
 		os.Exit(1)
 	}
 	log.Info("pricebook imported", "version", doc.Version, "models", len(doc.Models), "provider", *providerID)
+}
+
+func upsertUnit(ctx context.Context, tx pgx.Tx, version, providerID string, u provider.UnitPrice, unit, tier string) error {
+	if _, err := tx.Exec(ctx, `
+		insert into billing.retail_unit_prices
+			(version,model,unit,tier,usd_micros_per_unit,effective_from)
+		values ($1,$2,$3,$4,$5,now())
+		on conflict (version,model,unit,tier) do update set
+			usd_micros_per_unit=excluded.usd_micros_per_unit,
+			effective_from=excluded.effective_from`,
+		version, u.Model, unit, tier, u.RetailMicros); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		insert into billing.provider_unit_prices
+			(provider_id,version,model,unit,tier,usd_micros_per_unit,effective_from)
+		values ($1,$2,$3,$4,$5,$6,now())
+		on conflict (provider_id,version,model,unit,tier) do update set
+			usd_micros_per_unit=excluded.usd_micros_per_unit,
+			effective_from=excluded.effective_from`,
+		providerID, version, u.Model, unit, tier, u.ProviderMicros)
+	return err
 }
 
 func componentPrice(p provider.Price, component string) int64 {
