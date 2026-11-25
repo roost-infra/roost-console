@@ -626,6 +626,9 @@ func (s *Server) internalProductTokens(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "bad_request", "org_id is required")
 			return
 		}
+		if !invalidUUIDField(w, "org_id", orgID) {
+			return
+		}
 		// Service-authenticated issuance has no console user session: store
 		// NULL, the same shape as a legacy org-scoped token.
 		token, meta, err := s.store.IssueProductToken(r.Context(), orgID, product, "")
@@ -1244,6 +1247,9 @@ func (s *Server) compatAcquire(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "run_ref is required")
 		return
 	}
+	if !invalidUUIDField(w, "user_id", req.UserID) {
+		return
+	}
 	org, err := s.store.EnsureOrgByUserID(r.Context(), req.UserID)
 	if err != nil {
 		s.fail(w, err)
@@ -1279,6 +1285,9 @@ func (s *Server) compatRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RunRef == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "run_ref is required")
+		return
+	}
+	if !invalidUUIDField(w, "user_id", req.UserID) {
 		return
 	}
 	org, err := s.store.EnsureOrgByUserID(r.Context(), req.UserID)
@@ -1349,6 +1358,9 @@ func (s *Server) resolveUserOrg(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "user_id is required")
 		return
 	}
+	if !invalidUUIDField(w, "user_id", req.UserID) {
+		return
+	}
 	org, err := s.store.OrgForUser(r.Context(), req.UserID)
 	if err != nil {
 		s.fail(w, err)
@@ -1366,6 +1378,9 @@ func (s *Server) resolveEntitlement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "org_id and product are required")
 		return
 	}
+	if !invalidUUIDField(w, "org_id", req.OrgID) {
+		return
+	}
 	e, err := s.store.Resolve(r.Context(), req.OrgID, req.Product)
 	if err != nil {
 		s.fail(w, err)
@@ -1380,6 +1395,9 @@ func (s *Server) reserve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "org_id, product and run_ref are required")
 		return
 	}
+	if !invalidUUIDField(w, "org_id", req.OrgID) {
+		return
+	}
 	ttl := time.Duration(req.TTLSeconds) * time.Second
 	l, err := s.store.Reserve(r.Context(), req.OrgID, req.Product, req.RunRef, req.EstimatedCredits, ttl)
 	if err != nil {
@@ -1390,6 +1408,10 @@ func (s *Server) reserve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) settle(w http.ResponseWriter, r *http.Request) {
+	leaseID, ok := requireUUIDPath(w, r, "leaseID")
+	if !ok {
+		return
+	}
 	var req struct {
 		ActualCredits int64 `json:"actual_credits"`
 	}
@@ -1397,7 +1419,7 @@ func (s *Server) settle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "actual_credits is required")
 		return
 	}
-	l, err := s.store.Settle(r.Context(), r.PathValue("leaseID"), req.ActualCredits)
+	l, err := s.store.Settle(r.Context(), leaseID, req.ActualCredits)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -1414,6 +1436,9 @@ func (s *Server) charge(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrgID == "" || req.Product == "" || req.Ref == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "org_id, product and ref are required")
+		return
+	}
+	if !invalidUUIDField(w, "org_id", req.OrgID) {
 		return
 	}
 	ok, err := s.store.Charge(r.Context(), req.OrgID, req.Product, req.Ref, req.Credits)
@@ -1433,6 +1458,9 @@ func (s *Server) settleByRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrgID == "" || req.Product == "" || req.RunRef == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "org_id, product and run_ref are required")
+		return
+	}
+	if !invalidUUIDField(w, "org_id", req.OrgID) {
 		return
 	}
 	found, err := s.store.SettleByRun(r.Context(), req.OrgID, req.Product, req.RunRef, req.ActualCredits)
@@ -1455,6 +1483,9 @@ func (s *Server) drawByRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "org_id, product, run_ref and ref are required")
 		return
 	}
+	if !invalidUUIDField(w, "org_id", req.OrgID) {
+		return
+	}
 	ok, err := s.store.DrawByRun(r.Context(), req.OrgID, req.Product, req.RunRef, req.Ref, req.Credits)
 	if err != nil {
 		s.fail(w, err)
@@ -1473,6 +1504,9 @@ func (s *Server) releaseByRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "org_id, product and run_ref are required")
 		return
 	}
+	if !invalidUUIDField(w, "org_id", req.OrgID) {
+		return
+	}
 	if err := s.store.ReleaseByRun(r.Context(), req.OrgID, req.Product, req.RunRef); err != nil {
 		s.fail(w, err)
 		return
@@ -1481,7 +1515,11 @@ func (s *Server) releaseByRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) release(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.Release(r.Context(), r.PathValue("leaseID")); err != nil {
+	leaseID, ok := requireUUIDPath(w, r, "leaseID")
+	if !ok {
+		return
+	}
+	if err := s.store.Release(r.Context(), leaseID); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -1504,6 +1542,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "addon_not_eligible", "the always-on add-on requires the Pro or Max plan")
 	case errors.Is(err, billing.ErrInvalidSandboxUsage):
 		writeError(w, http.StatusBadRequest, "invalid_sandbox_usage", err.Error())
+	case isUUIDParseError(err):
+		writeError(w, http.StatusBadRequest, "bad_request", "one or more ids are not a UUID")
 	default:
 		s.log.Error("api error", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal error")

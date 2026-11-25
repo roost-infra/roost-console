@@ -239,6 +239,9 @@ func (s *Store) Release(ctx context.Context, leaseID string) error {
 	var reserved int64
 	var status string
 	if err := tx.QueryRow(ctx, `select org_id,reserved_credits,status from billing.usage_leases where id=$1 for update`, leaseID).Scan(&orgID, &reserved, &status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		return err
 	}
 	if status != "active" {

@@ -21,7 +21,7 @@ func postRelayReserve(t *testing.T, s *Server, body string) *httptest.ResponseRe
 func TestRelayReserveRecordsPriceVersion(t *testing.T) {
 	f := &fakeRelayBilling{}
 	rec := postRelayReserve(t, relayTestServer(f), `{
-		"request_id":"req-1","subject_ref":"org-1","amount_minor":2500,
+		"request_id":"req-1","subject_ref":"4d1e4d5e-8f0f-4a3a-9a3e-2b1c0d9e8f7a","amount_minor":2500,
 		"currency":"CREDIT","ttl_seconds":900,"price_version":"2026-11-25.1"
 	}`)
 	if rec.Code != http.StatusOK {
@@ -31,7 +31,7 @@ func TestRelayReserveRecordsPriceVersion(t *testing.T) {
 		t.Fatalf("reserve calls=%+v", f.reserveCalls)
 	}
 	call := f.reserveCalls[0]
-	if call.PriceVersion != "2026-11-25.1" || call.Amount != 3 || call.OrgID != "org-1" || call.RequestID != "req-1" {
+	if call.PriceVersion != "2026-11-25.1" || call.Amount != 3 || call.OrgID != "4d1e4d5e-8f0f-4a3a-9a3e-2b1c0d9e8f7a" || call.RequestID != "req-1" {
 		t.Fatalf("reserve input=%+v", call)
 	}
 	body := decodeRelayResponse(t, rec)
@@ -46,7 +46,7 @@ func TestRelayReserveRecordsPriceVersion(t *testing.T) {
 func TestRelayReservePriceVersionMismatch(t *testing.T) {
 	f := &fakeRelayBilling{reserveErr: billing.ErrPriceVersionMismatch}
 	rec := postRelayReserve(t, relayTestServer(f), `{
-		"request_id":"req-1","subject_ref":"org-1","amount_minor":100,
+		"request_id":"req-1","subject_ref":"4d1e4d5e-8f0f-4a3a-9a3e-2b1c0d9e8f7a","amount_minor":100,
 		"currency":"CREDIT","price_version":"bogus"
 	}`)
 	if rec.Code != http.StatusConflict {

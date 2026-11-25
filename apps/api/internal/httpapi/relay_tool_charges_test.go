@@ -16,6 +16,10 @@ import (
 	"github.com/JingxuanC/roost-console/apps/api/internal/config"
 )
 
+// testReservationUUID is the valid UUID every handler test uses for the
+// {reservationID} path value.
+const testReservationUUID = "6f1b1e5a-8f8e-4c4c-9a9e-2a7d6c5b4a30"
+
 type fakeRelayBilling struct {
 	settleCalls   []fakeSettleCall
 	settleV2Calls []billing.RelaySettleInput
@@ -108,8 +112,8 @@ func relayTestServer(f *fakeRelayBilling) *Server {
 
 func postRelaySettle(t *testing.T, s *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "http://example/v1/relay/reservations/res-1/settle", strings.NewReader(body))
-	req.SetPathValue("reservationID", "res-1")
+	req := httptest.NewRequest(http.MethodPost, "http://example/v1/relay/reservations/6f1b1e5a-8f8e-4c4c-9a9e-2a7d6c5b4a30/settle", strings.NewReader(body))
+	req.SetPathValue("reservationID", testReservationUUID)
 	rec := httptest.NewRecorder()
 	s.relaySettle(rec, req)
 	return rec
@@ -143,7 +147,7 @@ func TestRelaySettleWithToolCharges(t *testing.T) {
 		t.Fatalf("settle calls=%d", len(f.settleCalls))
 	}
 	call := f.settleCalls[0]
-	if call.reservationID != "res-1" || call.settlementID != "stl-1" || call.idempotencyKey != "settle:req-1" {
+	if call.reservationID != testReservationUUID || call.settlementID != "stl-1" || call.idempotencyKey != "settle:req-1" {
 		t.Fatalf("call identifiers=%+v", call)
 	}
 	if call.amount != 1 {
@@ -290,15 +294,15 @@ func TestRelayReservationToolChargesEndpoint(t *testing.T) {
 		Tool: "search", Unit: "call", Quantity: 1, UnitPriceMicro: 700000,
 		AmountMinor: 7, ProviderCostMicro: 750, Status: "succeeded",
 	}}}
-	req := httptest.NewRequest(http.MethodGet, "http://example/v1/relay/reservations/res-1/tool-charges", nil)
-	req.SetPathValue("reservationID", "res-1")
+	req := httptest.NewRequest(http.MethodGet, "http://example/v1/relay/reservations/6f1b1e5a-8f8e-4c4c-9a9e-2a7d6c5b4a30/tool-charges", nil)
+	req.SetPathValue("reservationID", testReservationUUID)
 	rec := httptest.NewRecorder()
 	relayTestServer(f).relayReservationToolCharges(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	body := decodeRelayResponse(t, rec)
-	if body["reservation_id"] != "res-1" || body["tool_charges_amount_minor"] != float64(7) || body["tool_charges_provider_cost_micro"] != float64(750) {
+	if body["reservation_id"] != testReservationUUID || body["tool_charges_amount_minor"] != float64(7) || body["tool_charges_provider_cost_micro"] != float64(750) {
 		t.Fatalf("body=%v", body)
 	}
 }
@@ -333,7 +337,7 @@ func relayHTTPTestServer(f *fakeRelayBilling) http.Handler {
 func TestRelaySettleRouteWithToolCharges(t *testing.T) {
 	f := &fakeRelayBilling{settleOp: billing.RelayOperation{Found: true, Operation: "settle", Status: "settled", ReservationID: "res-1", Amount: 1}}
 	body := []byte(`{"settlement_id":"stl-1","idempotency_key":"settle:req-1","amount_minor":7,"tool_charges":[{"tool":"search","unit":"call","quantity":1,"unit_price_micro":700000,"amount_minor":7,"provider_cost_micro":750,"status":"succeeded"}]}`)
-	req := signedRelayRequest(http.MethodPost, "/v1/relay/reservations/res-1/settle", body)
+	req := signedRelayRequest(http.MethodPost, "/v1/relay/reservations/6f1b1e5a-8f8e-4c4c-9a9e-2a7d6c5b4a30/settle", body)
 	rec := httptest.NewRecorder()
 	relayHTTPTestServer(f).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -353,7 +357,7 @@ func TestRelayToolChargesRoute(t *testing.T) {
 		Tool: "search", Unit: "call", Quantity: 1, UnitPriceMicro: 700000,
 		AmountMinor: 7, ProviderCostMicro: 750, Status: "succeeded",
 	}}}
-	req := signedRelayRequest(http.MethodGet, "/v1/relay/reservations/res-1/tool-charges", nil)
+	req := signedRelayRequest(http.MethodGet, "/v1/relay/reservations/6f1b1e5a-8f8e-4c4c-9a9e-2a7d6c5b4a30/tool-charges", nil)
 	rec := httptest.NewRecorder()
 	relayHTTPTestServer(f).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -367,7 +371,7 @@ func TestRelayToolChargesRoute(t *testing.T) {
 
 func TestRelayToolChargesRouteRequiresServiceAuth(t *testing.T) {
 	f := &fakeRelayBilling{}
-	req := httptest.NewRequest(http.MethodGet, "http://example/v1/relay/reservations/res-1/tool-charges", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://example/v1/relay/reservations/6f1b1e5a-8f8e-4c4c-9a9e-2a7d6c5b4a30/tool-charges", nil)
 	rec := httptest.NewRecorder()
 	relayHTTPTestServer(f).ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
