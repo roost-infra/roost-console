@@ -103,23 +103,34 @@ curl -sS -X POST "$BASE/api/auth/billing/leases/release" \
 
 ### 1.3 过期结算
 
-在测试库里把上一步的 relay reservation 置为过期（模拟 `ExpireLeases`）：
+先新建一个 reservation（不要复用 1.1 已经 settled 的），再把它置为过期
+（模拟 `ExpireLeases`）：
+
+```bash
+REQ_EXP="req-expired-$(date +%s)"
+curl -sS -X POST "$BASE/v1/relay/reservations" \
+  -H "Content-Type: application/json" -H "X-Service-Token: $RELAY_SECRET" \
+  -d "{\"request_id\":\"$REQ_EXP\",\"subject_ref\":\"$ORG_ID\",
+       \"amount_minor\":50000,\"currency\":\"CREDIT\",
+       \"price_version\":\"2026-11-25.1\"}"
+RES_EXP=<reservation_id>
+```
 
 ```sql
--- 只对测试库执行；先释放 hold，再把 lease 置为 expired
+-- 只对测试库执行；模拟 ExpireLeases：先释放 hold，再标记 expired
 update billing.wallets
    set reserved_credits = reserved_credits - 50
  where org_id = '<ORG_ID>';
 update billing.usage_leases set status = 'expired'
- where id = '<RES_ID>';
+ where id = '<RES_EXP>';
 ```
 
-然后再次 settle（新的 `settlement_id` / `idempotency_key`）：
+然后 settle 这个过期 reservation（新的 `settlement_id` / `idempotency_key`）：
 
 ```bash
-curl -sS -X POST "$BASE/v1/relay/reservations/$RES_ID/settle" \
+curl -sS -X POST "$BASE/v1/relay/reservations/$RES_EXP/settle" \
   -H "Content-Type: application/json" -H "X-Service-Token: $RELAY_SECRET" \
-  -d "{\"settlement_id\":\"stl-expired-$REQ\",\"idempotency_key\":\"settle:expired:$REQ\",
+  -d "{\"settlement_id\":\"stl-expired-$REQ_EXP\",\"idempotency_key\":\"settle:expired:$REQ_EXP\",
        \"model\":\"claude-sonnet-5.5\",\"price_version\":\"2026-11-25.1\",
        \"usage\":{\"input\":1000,\"output\":10}}"
 # 期望 200；amount_credits=2, amount_minor=1179；reserved 不再被扣第二次
@@ -140,13 +151,20 @@ settle 一笔应付 180 的 relay 请求：
 
 ### 1.5 改价 → 409
 
-reserve 时锁 `price_version=2026-11-25.1`，settle 时故意报另一个版本：
+新建一个 reservation 时锁 `price_version=2026-11-25.1`，settle 时故意报另一个版本
+（不要复用已 settled 的 reservation）：
 
 ```bash
+REQ_PRICE="req-price-$(date +%s)"
+# 先用 price_version=2026-11-25.1 reserve 200，记下 RES_PRICE
+# curl ... /v1/relay/reservations -d '{"request_id":"...","subject_ref":"<ORG>",
+#   "amount_minor":200000,"currency":"CREDIT","price_version":"2026-11-25.1"}'
+RES_PRICE=<reservation_id>
+
 curl -sS -o /tmp/settle.json -w '%{http_code}\n' \
-  -X POST "$BASE/v1/relay/reservations/$RES_ID/settle" \
+  -X POST "$BASE/v1/relay/reservations/$RES_PRICE/settle" \
   -H "Content-Type: application/json" -H "X-Service-Token: $RELAY_SECRET" \
-  -d "{\"settlement_id\":\"stl-price-$REQ\",\"idempotency_key\":\"settle:price:$REQ\",
+  -d "{\"settlement_id\":\"stl-price-$REQ_PRICE\",\"idempotency_key\":\"settle:price:$REQ_PRICE\",
        \"model\":\"claude-sonnet-5.5\",\"price_version\":\"changed-version\",
        \"usage\":{\"input\":1}}"
 # 期望 409；error.code=price_version_mismatch；wallet/ledger 不变
@@ -157,12 +175,16 @@ curl -sS -o /tmp/settle.json -w '%{http_code}\n' \
 
 ### 1.6 压缩 net gain
 
-reserve 后带 `basis` settle：
+再新建一个 reservation，带 `basis` settle：
 
 ```bash
-curl -sS -X POST "$BASE/v1/relay/reservations/$RES_ID/settle" \
+REQ_CMP="req-cmp-$(date +%s)"
+# 用 price_version=2026-11-25.1 reserve 500，记下 RES_CMP
+RES_CMP=<reservation_id>
+
+curl -sS -X POST "$BASE/v1/relay/reservations/$RES_CMP/settle" \
   -H "Content-Type: application/json" -H "X-Service-Token: $RELAY_SECRET" \
-  -d "{\"settlement_id\":\"stl-cmp-$REQ\",\"idempotency_key\":\"settle:cmp:$REQ\",
+  -d "{\"settlement_id\":\"stl-cmp-$REQ_CMP\",\"idempotency_key\":\"settle:cmp:$REQ_CMP\",
        \"model\":\"claude-sonnet-5.5\",\"price_version\":\"2026-11-25.1\",
        \"usage\":{\"input\":150000,\"output\":2000},
        \"basis\":{\"mode\":\"original\",\"before_input_tokens\":150000,
