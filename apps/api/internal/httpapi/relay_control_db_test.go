@@ -20,7 +20,7 @@ import (
 
 func TestRelayControlCORSAllowsPut(t *testing.T) {
 	const origin = "https://console.example"
-	handler := New(config.Config{ConsoleOrigin: origin}, nil, nil, nil, nil).Handler()
+	handler := New(config.Config{ConsoleOrigin: origin}, nil, nil, nil, nil, nil).Handler()
 	request := httptest.NewRequest(http.MethodOptions, "/v1/orgs/org/relay/preferences/personal", nil)
 	request.Header.Set("Origin", origin)
 	request.Header.Set("Access-Control-Request-Method", http.MethodPut)
@@ -58,7 +58,7 @@ func TestRelayControlSignedRoutesDB(t *testing.T) {
 	const secret = "local-relay-test"
 	handler := New(config.Config{PublicBaseURL: "https://console.example/console-api",
 		ServiceSecrets: map[string][]string{"relay": {secret}, "causal": {secret}},
-	}, store, nil, nil, nil).Handler()
+	}, store, nil, nil, nil, nil).Handler()
 	now := time.Now()
 	post := func(service, path string, data any, want int) []byte {
 		t.Helper()
