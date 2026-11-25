@@ -156,6 +156,7 @@ func (s *Server) relaySettle(w http.ResponseWriter, r *http.Request) {
 		ToolCharges    []billing.ToolCharge `json:"tool_charges"`
 		Compression    *billing.Compression `json:"compression"`
 		Usage          json.RawMessage      `json:"usage"`
+		UpstreamUsage  json.RawMessage      `json:"upstream_usage"`
 		UsageStats     *billing.UsageEvent  `json:"usage_stats"`
 		// Settle V2 fields.
 		Model          string                    `json:"model"`
@@ -186,6 +187,19 @@ func (s *Server) relaySettle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeRelayError(w, http.StatusBadRequest, "invalid_usage", err.Error())
 		return
+	}
+	var upstreamUsage *billing.TokenUsage
+	if len(strings.TrimSpace(string(req.UpstreamUsage))) > 0 && strings.TrimSpace(string(req.UpstreamUsage)) != "null" {
+		var u billing.TokenUsage
+		if err := json.Unmarshal(req.UpstreamUsage, &u); err != nil {
+			writeRelayError(w, http.StatusBadRequest, "invalid_usage", "upstream_usage: "+err.Error())
+			return
+		}
+		if err := u.Validate(); err != nil {
+			writeRelayError(w, http.StatusBadRequest, "invalid_usage", "upstream_usage: "+err.Error())
+			return
+		}
+		upstreamUsage = &u
 	}
 	if stats == nil {
 		stats = req.UsageStats
@@ -257,6 +271,7 @@ func (s *Server) relaySettle(w http.ResponseWriter, r *http.Request) {
 		StartedAt:      startedAt,
 		PriceVersion:   req.PriceVersion,
 		Usage:          tokenUsage,
+		UpstreamUsage:  upstreamUsage,
 		Basis:          req.Basis,
 		ToolCharges:    charges,
 		AmountMinor:    req.AmountMinor,
