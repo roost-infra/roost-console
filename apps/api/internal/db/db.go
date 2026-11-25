@@ -15,8 +15,13 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
 	}
 	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
-	cfg.MaxConns = 10
-	cfg.MinConns = 1
+	// The billing/lending endpoints fan out over several statements per
+	// request, and the database sits in another region, so a ten-connection
+	// pool made callers queue behind each other and time out. Keep a small warm
+	// set and allow enough parallelism for bursts; the Supabase pooler in front
+	// of Postgres multiplexes these onto far fewer server connections.
+	cfg.MaxConns = 40
+	cfg.MinConns = 4
 	cfg.MaxConnLifetime = 30 * time.Minute
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
