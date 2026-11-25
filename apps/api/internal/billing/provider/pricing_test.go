@@ -143,3 +143,50 @@ func TestPlanAllocationRoundsToNearestMinor(t *testing.T) {
 		t.Fatalf("allocated = %d, want 3831", q.AllocatedMinor)
 	}
 }
+
+func TestPeakMultiplierAppliesToRetailAndProvider(t *testing.T) {
+	base, err := fixture().Quote(Request{
+		Model: "gpt-6-astra",
+		Usage: Usage{OriginalInput: 10_000, Input: 5_000, RetailTierInput: 10_000, ProviderTierInput: 5_000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peak, err := fixture().Quote(Request{
+		Model:   "gpt-6-astra",
+		PeakBPS: 20_000,
+		Usage:   Usage{OriginalInput: 10_000, Input: 5_000, RetailTierInput: 10_000, ProviderTierInput: 5_000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peak.RetailMinor != base.RetailMinor*2 || peak.ProviderMinor != base.ProviderMinor*2 {
+		t.Fatalf("peak retail/provider = %d/%d, want 2x of %d/%d", peak.RetailMinor, peak.ProviderMinor, base.RetailMinor, base.ProviderMinor)
+	}
+	if peak.MarginBPS != base.MarginBPS {
+		t.Fatalf("peak margin = %d, want unchanged %d", peak.MarginBPS, base.MarginBPS)
+	}
+}
+
+func TestPricebookCacheDoesNotDoubleChargeUser(t *testing.T) {
+	p := loadFixture(t)
+	q, err := p.Calculator().Quote(Request{
+		Model: "gpt-6-astra",
+		Usage: Usage{
+			OriginalInput:     10_000,
+			Input:             2_000,
+			CacheRead:         3_000,
+			RetailTierInput:   10_000,
+			ProviderTierInput: 5_000,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.RetailMinor != 34_000 {
+		t.Fatalf("retail = %d, want 34000 (original input only)", q.RetailMinor)
+	}
+	if q.ProviderMinor >= 6_800 {
+		t.Fatalf("cache hit provider cost = %d, want below all-input cost 6800", q.ProviderMinor)
+	}
+}
