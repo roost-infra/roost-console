@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -376,7 +375,8 @@ func (b PriceBook) InternalView() InternalPriceBookView {
 // Finalize sorts the book into a canonical order and computes the content
 // hash. The hash covers the public projection only, so the page hash, the
 // public response hash and the internal (cost-bearing) response hash are all
-// comparable in CI.
+// comparable in CI. The serialization is sorted-key canonical JSON (see
+// canonicalJSON), matching roost-website/scripts/generate-prices.mjs.
 func (b *PriceBook) Finalize() {
 	sort.SliceStable(b.Models, func(i, j int) bool { return b.Models[i].Model < b.Models[j].Model })
 	for i := range b.Models {
@@ -435,7 +435,9 @@ func (b PriceBook) computeHash() string {
 		Models:      b.jsonModels(),
 		Tools:       b.jsonTools(),
 	}
-	data, err := json.Marshal(payload)
+	// The hash covers the same canonical bytes the website generator hashes
+	// (sorted keys at every level), so page hash == API ETag == book hash.
+	data, err := canonicalJSON(payload)
 	if err != nil {
 		return ""
 	}
