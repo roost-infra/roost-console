@@ -82,23 +82,48 @@ jobs:
           path: build
           merge-multiple: true
       - name: Configure SSH
+        env:
+          API_HOST: ${{ vars.CONSOLE_API_HOST }}
+          WEB_HOST: ${{ vars.CONSOLE_WEB_HOST }}
         run: |
           install -d -m 700 ~/.ssh
           printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy
           chmod 600 ~/.ssh/deploy
           printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-      - name: Upload artifacts
+          ssh-keyscan -H "$API_HOST" "$WEB_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Upload API artifact
         env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
+          HOST: ${{ vars.CONSOLE_API_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
         run: |
           scp -q -i ~/.ssh/deploy -o UserKnownHostsFile=~/.ssh/known_hosts \
             build/roost-console.gz "$USER@$HOST:/tmp/roost-console-${{ github.sha }}.gz"
+      - name: Deploy API
+        env:
+          HOST: ${{ vars.CONSOLE_API_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          SHA: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy -o UserKnownHostsFile=~/.ssh/known_hosts "$USER@$HOST" "bash -s -- $SHA" <<'REMOTE'
+          set -euo pipefail
+          SHA="$1"
+          GZ="/tmp/roost-console-$SHA.gz"
+          BIN="/tmp/roost-console-$SHA"
+          gunzip -c "$GZ" > "$BIN"
+          chmod 755 "$BIN"
+          sudo -n /usr/local/bin/roost-deploy console-api "$BIN"
+          rm -f "$GZ" "$BIN"
+          REMOTE
+      - name: Upload web artifact
+        env:
+          HOST: ${{ vars.CONSOLE_WEB_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
           scp -q -i ~/.ssh/deploy -o UserKnownHostsFile=~/.ssh/known_hosts \
             build/console-web.tgz "$USER@$HOST:/tmp/console-web-${{ github.sha }}.tgz"
-      - name: Deploy
+      - name: Deploy web
         env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
+          HOST: ${{ vars.CONSOLE_WEB_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
           SHA: ${{ github.sha }}
         run: |
@@ -108,38 +133,13 @@ jobs:
           SHA="$1"
           ASSET="$2"
           TS=$(date +%Y%m%d-%H%M%S)
-          API_DIR=/opt/roost/apps/console-api
           SITE_DIR=/opt/roost/apps/site-official
-          API_BAK="roost-console.bak-$TS"
           WEB_BAK="console.bak-$TS"
 
           prune() {
-            # Keep the three newest backups of one artifact; older ones go.
             ( cd "$1" && ls -1dt "$2"* 2>/dev/null | tail -n +4 | xargs -r rm -rf -- ) || true
           }
 
-          # --- API binary -------------------------------------------------
-          cd "$API_DIR"
-          cp -a roost-console "$API_BAK"
-          gunzip -c "/tmp/roost-console-$SHA.gz" > /tmp/roost-console.new
-          chmod 755 /tmp/roost-console.new
-          mv /tmp/roost-console.new roost-console
-          sudo -n /usr/bin/systemctl restart roost-console-api
-          ok=0
-          for _ in $(seq 1 20); do
-            if curl -fsS -m 2 http://127.0.0.1:8790/healthz >/dev/null 2>&1; then ok=1; break; fi
-            sleep 1
-          done
-          if [ "$ok" != 1 ]; then
-            echo "::error::API health check failed; rolling back"
-            cp -a "$API_BAK" roost-console
-            sudo -n /usr/bin/systemctl restart roost-console-api || true
-            exit 1
-          fi
-          prune "$API_DIR" "roost-console.bak-"
-          echo "api deployed ($SHA)"
-
-          # --- Console web ------------------------------------------------
           cd "$SITE_DIR"
           rm -rf console.new
           mkdir console.new
@@ -158,12 +158,17 @@ jobs:
             exit 1
           fi
           prune "$SITE_DIR" "console.bak-"
+          rm -f "/tmp/console-web-$SHA.tgz"
           echo "web deployed ($SHA)"
-
-          rm -f "/tmp/roost-console-$SHA.gz" "/tmp/console-web-$SHA.tgz"
           REMOTE
       - name: Verify public endpoints
         run: |
-          curl -fsS -o /dev/null https://www.roostbots.com/console/
-          curl -fsS https://www.roostbots.com/console/ | grep -q "$(cat build/index-asset.txt)"
-          curl -fsS -o /dev/null https://www.roostbots.com/console-api/healthz
+          for _ in $(seq 1 10); do
+            if curl -fsS -o /dev/null https://www.roostbots.com/console-api/healthz && \
+               curl -fsS https://www.roostbots.com/console/ | grep -q "$(cat build/index-asset.txt)"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::public endpoint verification failed"
+          exit 1
