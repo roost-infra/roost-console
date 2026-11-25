@@ -34,8 +34,11 @@ type RelaySettleInput struct {
 	StartedAt      time.Time
 	PriceVersion   string
 	Usage          *TokenUsage
-	Basis          *CompressionBasis
-	ToolCharges    []ToolCharge
+	// UpstreamUsage is the actual compressed/provider view. It is additive to
+	// the charge view and used only by shadow provider accounting.
+	UpstreamUsage *TokenUsage
+	Basis         *CompressionBasis
+	ToolCharges   []ToolCharge
 	// AmountMinor is the transitional relay-computed amount. When present the
 	// console recomputes and rejects a mismatch with ErrAmountMismatch without
 	// charging.
@@ -317,6 +320,12 @@ func (s *Store) RelaySettleV2(ctx context.Context, in RelaySettleInput) (RelayOp
 			return RelayOperation{}, err
 		}
 	}
+	upstreamUsage := usage
+	if in.UpstreamUsage != nil {
+		upstreamUsage = *in.UpstreamUsage
+	}
+	shadow, _ := s.shadowProviderQuote(ctx, tx, in.ProviderID, in.ProviderPlanID, in.Model, usage, upstreamUsage)
+
 	event := stats
 	if event == nil && !usage.IsZero() {
 		event = &UsageEvent{
@@ -337,7 +346,14 @@ func (s *Store) RelaySettleV2(ctx context.Context, in RelaySettleInput) (RelayOp
 				event.UpstreamCostMinor = &cost
 			}
 		}
-		if err := insertUsageEventV2(ctx, tx, orgID, requestID, in.SettlementID, in.ReservationID, event, in.UpstreamID, in.ProviderID, in.ProviderPlanID, priceVersion); err != nil {
+		var retailMinor, providerCostMicros, grossMinor *int64
+		providerBasis := ""
+		if shadow != nil {
+			r, p, g := shadow.RetailMinor, shadow.AllocatedMicros, shadow.GrossMinor
+			retailMinor, providerCostMicros, grossMinor = &r, &p, &g
+			providerBasis = "provider"
+		}
+		if err := insertUsageEventV2(ctx, tx, orgID, requestID, in.SettlementID, in.ReservationID, event, in.UpstreamID, in.ProviderID, in.ProviderPlanID, priceVersion, retailMinor, providerCostMicros, grossMinor, providerBasis); err != nil {
 			return RelayOperation{}, err
 		}
 	}

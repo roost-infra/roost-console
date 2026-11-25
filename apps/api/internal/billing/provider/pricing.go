@@ -117,17 +117,19 @@ type Request struct {
 
 // Quote is the complete cost/retail/margin view of one request.
 type Quote struct {
-	Model          string
-	RetailTier     Tier
-	ProviderTier   Tier
-	RetailPrice    Price
-	ProviderPrice  Price
-	RetailMinor    int64
-	RetailCredits  int64
-	ProviderMinor  int64
-	AllocatedMinor int64
-	GrossMinor     int64
-	MarginBPS      int64
+	Model           string
+	RetailTier      Tier
+	ProviderTier    Tier
+	RetailPrice     Price
+	ProviderPrice   Price
+	RetailMinor     int64
+	RetailCredits   int64
+	ProviderMinor   int64
+	ProviderMicros  int64
+	AllocatedMinor  int64
+	AllocatedMicros int64
+	GrossMinor      int64
+	MarginBPS       int64
 }
 
 // Calculator is a pair of price books plus one subscription plan.
@@ -200,8 +202,10 @@ func (c Calculator) Quote(req Request) (Quote, error) {
 	providerMinor := usdMicrosToMinor(providerMicros)
 
 	allocatedMinor := providerMinor
+	allocatedMicros := providerMicros
 	if c.Plan.AllowanceMicros > 0 {
 		allocatedMinor = mulDivRound(providerMinor, c.Plan.CostMicros, c.Plan.AllowanceMicros)
+		allocatedMicros = mulDivRound(providerMicros, c.Plan.CostMicros, c.Plan.AllowanceMicros)
 	}
 	grossMinor := retailMinor - allocatedMinor
 	marginBPS := int64(0)
@@ -209,17 +213,19 @@ func (c Calculator) Quote(req Request) (Quote, error) {
 		marginBPS = mulDivRound(grossMinor, 10_000, retailMinor)
 	}
 	return Quote{
-		Model:          req.Model,
-		RetailTier:     retailTier,
-		ProviderTier:   providerTier,
-		RetailPrice:    retailTier.Price,
-		ProviderPrice:  providerTier.Price,
-		RetailMinor:    retailMinor,
-		RetailCredits:  creditsFromMinor(retailMinor),
-		ProviderMinor:  providerMinor,
-		AllocatedMinor: allocatedMinor,
-		GrossMinor:     grossMinor,
-		MarginBPS:      marginBPS,
+		Model:           req.Model,
+		RetailTier:      retailTier,
+		ProviderTier:    providerTier,
+		RetailPrice:     retailTier.Price,
+		ProviderPrice:   providerTier.Price,
+		RetailMinor:     retailMinor,
+		RetailCredits:   creditsFromMinor(retailMinor),
+		ProviderMinor:   providerMinor,
+		ProviderMicros:  providerMicros,
+		AllocatedMinor:  allocatedMinor,
+		AllocatedMicros: allocatedMicros,
+		GrossMinor:      grossMinor,
+		MarginBPS:       marginBPS,
 	}, nil
 }
 

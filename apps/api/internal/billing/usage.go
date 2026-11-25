@@ -682,7 +682,7 @@ func (s *Store) SettleByRunV2(ctx context.Context, in SettleRunInput) (SettleRun
 		if i > 0 {
 			settlementID = fmt.Sprintf("%s:model:%d:%s", leaseID, i, usage.Model)
 		}
-		if err := insertUsageEventV2(ctx, tx, in.OrgID, in.RunRef, settlementID, leaseID, event, "", priceVersion); err != nil {
+		if err := insertUsageEventV2(ctx, tx, in.OrgID, in.RunRef, settlementID, leaseID, event, "", "", "", priceVersion, nil, nil, nil, ""); err != nil {
 			return SettleRunResult{}, err
 		}
 	}

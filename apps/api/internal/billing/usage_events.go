@@ -167,7 +167,7 @@ func queryUsageEvent(ctx context.Context, q usageEventQuerier, leaseID string) (
 // insertUsageEventV2 writes a usage row together with the V2 provenance:
 // upstream_id attributes cost to a supplier and policy_version records the
 // price book version the charge used.
-func insertUsageEventV2(ctx context.Context, tx pgx.Tx, orgID, requestID, settlementID, leaseID string, u *UsageEvent, upstreamID, providerID, providerPlanID, policyVersion string) error {
+func insertUsageEventV2(ctx context.Context, tx pgx.Tx, orgID, requestID, settlementID, leaseID string, u *UsageEvent, upstreamID, providerID, providerPlanID, policyVersion string, retailMinor, providerCostMicros, grossMinor *int64, providerBasis string) error {
 	if u == nil {
 		return nil
 	}
@@ -175,11 +175,13 @@ func insertUsageEventV2(ctx context.Context, tx pgx.Tx, orgID, requestID, settle
 		insert into billing.usage_events
 			(org_id,request_id,settlement_id,lease_id,model,session_id,requests,input_tokens,
 			 output_tokens,cache_read_tokens,cache_write_tokens,upstream_cost_minor,
-			 upstream_id,provider_id,provider_plan_id,policy_version)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			 upstream_id,provider_id,provider_plan_id,policy_version,
+			 retail_minor,provider_cost_micros,gross_minor,provider_cost_basis)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		on conflict (settlement_id) do nothing`,
 		orgID, requestID, settlementID, leaseID, u.Model, nullIfEmpty(u.SessionID), u.Requests, u.InputTokens,
 		u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens, u.UpstreamCostMinor,
-		nullIfEmpty(upstreamID), nullIfEmpty(providerID), nullIfEmpty(providerPlanID), nullIfEmpty(policyVersion))
+		nullIfEmpty(upstreamID), nullIfEmpty(providerID), nullIfEmpty(providerPlanID), nullIfEmpty(policyVersion),
+		retailMinor, providerCostMicros, grossMinor, nullIfEmpty(providerBasis))
 	return err
 }
