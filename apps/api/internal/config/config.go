@@ -46,7 +46,11 @@ type Config struct {
 	AdminEmails       []string
 	// PaymentOrderTTL expires unpaid orders after this window so an abandoned
 	// checkout cannot sit in the order list forever.
-	PaymentOrderTTL   time.Duration
+	PaymentOrderTTL time.Duration
+	// AuthCacheTTL bounds how long a verified identity is reused. The identity
+	// provider is remote, so a short cache turns every request into a network
+	// call.
+	AuthCacheTTL      time.Duration
 	RatePaymentNotify int
 	RateOIDCToken     int
 	RateProductToken  int
@@ -111,6 +115,7 @@ func Load() Config {
 		EPUSDTAllowEmails: splitCSV(get("EPUSDT_ALLOW_EMAILS", "")),
 		Environment:       get("APP_ENV", "development"),
 		PaymentOrderTTL:   getDuration("PAYMENT_ORDER_TTL", 2*time.Hour),
+		AuthCacheTTL:      getDuration("AUTH_CACHE_TTL", 5*time.Minute),
 		RatePaymentNotify: getInt("RATE_PAYMENT_NOTIFY_PER_MIN", 120),
 		RateOIDCToken:     getInt("RATE_OIDC_TOKEN_PER_MIN", 60),
 		RateProductToken:  getInt("RATE_PRODUCT_TOKEN_PER_MIN", 5),

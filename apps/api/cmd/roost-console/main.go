@@ -245,6 +245,7 @@ func main() {
 
 	store := billing.New(pool)
 	verifier := auth.NewVerifier(cfg.SupabaseURL, cfg.SupabaseAnonKey, supabaseHTTPClient(cfg))
+	verifier.SetCacheTTL(cfg.AuthCacheTTL)
 	pay := &payment.Client{
 		AppID: cfg.XunhuAppID, AppSecret: cfg.XunhuAppSecret, APIBase: cfg.XunhuAPIBase,
 		QueryURL:  cfg.XunhuQueryURL,
