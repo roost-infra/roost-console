@@ -2547,7 +2547,10 @@ function Console({ session }: { session: Session }) {
   let body: ReactNode;
   switch (page) {
     case 'keys':
-      body = <><RelayControls key={me.org.id} token={token} orgId={me.org.id} admin={['owner', 'admin'].includes(me.org.role)} /><RelayKeys token={token} orgId={me.org.id} /></>;
+      body = <RelayKeys token={token} orgId={me.org.id} />;
+      break;
+    case 'settings':
+      body = <RelayControls key={me.org.id} token={token} orgId={me.org.id} admin={['owner', 'admin'].includes(me.org.role)} />;
       break;
     case 'usage':
       body = <UsageDashboard token={token} orgId={me.org.id} />;

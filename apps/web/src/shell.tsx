@@ -4,6 +4,7 @@ import { DOCS_URL, MODELS_URL } from './access';
 export type RouteKey =
   | 'overview'
   | 'keys'
+  | 'settings'
   | 'usage'
   | 'memory'
   | 'dsalpha'
@@ -13,11 +14,12 @@ export type RouteKey =
   | 'labs'
   | 'admin';
 
-const ROUTES: RouteKey[] = ['overview', 'keys', 'usage', 'memory', 'dsalpha', 'wallet', 'billing', 'referral', 'labs', 'admin'];
+const ROUTES: RouteKey[] = ['overview', 'keys', 'settings', 'usage', 'memory', 'dsalpha', 'wallet', 'billing', 'referral', 'labs', 'admin'];
 
 // Old single-page anchors (#billing, #api-keys, …) keep working as deep links.
 const LEGACY: Record<string, RouteKey> = {
   'api-keys': 'keys',
+  'relay-settings': 'settings',
   usage: 'usage',
   'causal-memory': 'memory',
   plans: 'dsalpha',
@@ -80,6 +82,7 @@ export function useRoute(): [RouteKey, (next: RouteKey) => void] {
 const ICONS: Record<string, ReactNode> = {
   overview: <><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></>,
   keys: <><circle cx="7.5" cy="15.5" r="4.5" /><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14.5 8.5l2 2" /></>,
+  settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" /></>,
   usage: <><path d="M3 3v18h18" /><path d="m7 15 4-4 3 3 6-7" /></>,
   models: <><path d="M12 2 3 7l9 5 9-5-9-5Z" /><path d="m3 12 9 5 9-5M3 17l9 5 9-5" /></>,
   docs: <><path d="M4 19.5V5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2Z" /><path d="M8 7h6M8 11h6" /></>,
@@ -111,6 +114,7 @@ const NAV: Array<{ title: string; items: NavItem[]; when?: 'owner' | 'admin' }> 
     items: [
       { key: 'keys', label: 'API Key 与接入', icon: 'keys' },
       { key: 'usage', label: '用量统计', icon: 'usage' },
+      { key: 'settings', label: '上下文与记忆', icon: 'settings' },
       { href: MODELS_URL, label: '模型与价格', icon: 'models' },
       { href: DOCS_URL, label: '接入文档', icon: 'docs' },
     ],
@@ -137,6 +141,7 @@ const NAV: Array<{ title: string; items: NavItem[]; when?: 'owner' | 'admin' }> 
 export const ROUTE_TITLES: Record<RouteKey, string> = {
   overview: '概览',
   keys: 'API Key 与接入',
+  settings: '上下文与记忆',
   usage: '用量统计',
   memory: '记忆 Memory',
   dsalpha: 'DSAlpha 投研',
