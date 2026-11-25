@@ -110,6 +110,10 @@ func (s *Server) relayReserve(w http.ResponseWriter, r *http.Request) {
 		writeRelayError(w, http.StatusBadRequest, "invalid_request", "request_id and subject_ref are required")
 		return
 	}
+	if !isUUID(req.SubjectRef) {
+		writeRelayError(w, http.StatusBadRequest, "invalid_request", "subject_ref must be a UUID")
+		return
+	}
 	if req.Currency != billing.RelayCurrency {
 		writeRelayError(w, http.StatusBadRequest, "currency_mismatch", "unsupported currency")
 		return
@@ -138,6 +142,11 @@ func (s *Server) relayReserve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) relaySettle(w http.ResponseWriter, r *http.Request) {
+	reservationID := strings.TrimSpace(r.PathValue("reservationID"))
+	if !isUUID(reservationID) {
+		writeRelayError(w, http.StatusBadRequest, "invalid_request", "reservation_id must be a UUID")
+		return
+	}
 	var req struct {
 		SettlementID   string               `json:"settlement_id"`
 		IdempotencyKey string               `json:"idempotency_key"`
@@ -223,7 +232,7 @@ func (s *Server) relaySettle(w http.ResponseWriter, r *http.Request) {
 		if req.AmountMinor != nil {
 			amount = relayCreditsFromMinor(*req.AmountMinor)
 		}
-		op, err := s.relayStore().RelaySettleWithDetails(r.Context(), r.PathValue("reservationID"), req.SettlementID, req.IdempotencyKey, amount, charges, compression, usageEvent)
+		op, err := s.relayStore().RelaySettleWithDetails(r.Context(), reservationID, req.SettlementID, req.IdempotencyKey, amount, charges, compression, usageEvent)
 		if err != nil {
 			relayStoreError(w, err)
 			return
@@ -236,7 +245,7 @@ func (s *Server) relaySettle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op, err := s.relayStore().RelaySettleV2(r.Context(), billing.RelaySettleInput{
-		ReservationID:  r.PathValue("reservationID"),
+		ReservationID:  reservationID,
 		SettlementID:   req.SettlementID,
 		IdempotencyKey: req.IdempotencyKey,
 		Model:          req.Model,
@@ -307,7 +316,12 @@ func parseRelayUsage(raw json.RawMessage) (*billing.TokenUsage, *billing.UsageEv
 }
 
 func (s *Server) relayRelease(w http.ResponseWriter, r *http.Request) {
-	op, err := s.relayStore().RelayRelease(r.Context(), r.PathValue("reservationID"))
+	reservationID := strings.TrimSpace(r.PathValue("reservationID"))
+	if !isUUID(reservationID) {
+		writeRelayError(w, http.StatusBadRequest, "invalid_request", "reservation_id must be a UUID")
+		return
+	}
+	op, err := s.relayStore().RelayRelease(r.Context(), reservationID)
 	if err != nil {
 		relayStoreError(w, err)
 		return
@@ -331,7 +345,11 @@ func (s *Server) relayOperation(w http.ResponseWriter, r *http.Request) {
 // relayReservationToolCharges exposes a reservation's persisted breakdown
 // directly, for reporting without replaying the settle idempotency key.
 func (s *Server) relayReservationToolCharges(w http.ResponseWriter, r *http.Request) {
-	reservationID := r.PathValue("reservationID")
+	reservationID := strings.TrimSpace(r.PathValue("reservationID"))
+	if !isUUID(reservationID) {
+		writeRelayError(w, http.StatusBadRequest, "invalid_request", "reservation_id must be a UUID")
+		return
+	}
 	charges, err := s.relayStore().RelayToolCharges(r.Context(), reservationID)
 	if err != nil {
 		relayStoreError(w, err)
@@ -436,6 +454,8 @@ func relayStoreError(w http.ResponseWriter, err error) {
 		writeRelayError(w, http.StatusBadRequest, "invalid_compression", err.Error())
 	case errors.Is(err, billing.ErrInvalidUsage):
 		writeRelayError(w, http.StatusBadRequest, "invalid_usage", err.Error())
+	case isUUIDParseError(err):
+		writeRelayError(w, http.StatusBadRequest, "invalid_request", "reservation_id must be a UUID")
 	default:
 		writeRelayError(w, http.StatusInternalServerError, "internal_error", "internal error")
 	}
