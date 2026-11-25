@@ -40,9 +40,10 @@ create table if not exists billing.provider_prices (
   model text not null,
   component text not null check (component in ('input','output','cache_read','cache_write')),
   tier_max_input bigint not null default 0,      -- 0 = no upper bound
+  peak text not null default '',                 -- '' / 非高峰 / 高峰
   usd_micros_per_million bigint not null check (usd_micros_per_million >= 0),
   effective_from timestamptz not null default now(),
-  unique (provider_id, version, model, component, tier_max_input)
+  unique (provider_id, version, model, component, tier_max_input, peak)
 );
 create index if not exists provider_prices_lookup
   on billing.provider_prices(provider_id, model, component, effective_from desc);
@@ -53,9 +54,10 @@ create table if not exists billing.retail_prices (
   model text not null,
   component text not null check (component in ('input','output','cache_read','cache_write')),
   tier_max_input bigint not null default 0,
+  peak text not null default '',
   usd_micros_per_million bigint not null check (usd_micros_per_million >= 0),
   effective_from timestamptz not null default now(),
-  unique (version, model, component, tier_max_input)
+  unique (version, model, component, tier_max_input, peak)
 );
 create index if not exists retail_prices_lookup
   on billing.retail_prices(model, component, effective_from desc);

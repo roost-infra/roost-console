@@ -25,20 +25,20 @@ func (s *Store) shadowProviderQuote(
 		return nil, nil
 	}
 	retail, ok, err := loadShadowBook(ctx, tx, `
-		select distinct on (component,tier_max_input)
-		       component,tier_max_input,usd_micros_per_million
+		select distinct on (component,tier_max_input,peak)
+		       component,tier_max_input,peak,usd_micros_per_million
 		from billing.retail_prices
 		where model=$1 and effective_from <= now()
-		order by component,tier_max_input,effective_from desc`, model)
+		order by component,tier_max_input,peak,effective_from desc`, model)
 	if err != nil || !ok {
 		return nil, err
 	}
 	prov, ok, err := loadShadowBook(ctx, tx, `
-		select distinct on (component,tier_max_input)
-		       component,tier_max_input,usd_micros_per_million
+		select distinct on (component,tier_max_input,peak)
+		       component,tier_max_input,peak,usd_micros_per_million
 		from billing.provider_prices
 		where provider_id=$1 and model=$2 and effective_from <= now()
-		order by component,tier_max_input,effective_from desc`, providerID, model)
+		order by component,tier_max_input,peak,effective_from desc`, providerID, model)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -95,14 +95,19 @@ func loadShadowBook(ctx context.Context, tx pgx.Tx, query string, args ...any) (
 		return nil, false, err
 	}
 	defer rows.Close()
-	byTier := map[int64]provider.Price{}
+	type tierKey struct {
+		maxInput int64
+		peak     string
+	}
+	byTier := map[tierKey]provider.Price{}
 	for rows.Next() {
-		var component string
+		var component, peak string
 		var maxInput, micros int64
-		if err := rows.Scan(&component, &maxInput, &micros); err != nil {
+		if err := rows.Scan(&component, &maxInput, &peak, &micros); err != nil {
 			return nil, false, err
 		}
-		p := byTier[maxInput]
+		key := tierKey{maxInput: maxInput, peak: peak}
+		p := byTier[key]
 		switch component {
 		case "input":
 			p.Input = micros
@@ -113,7 +118,7 @@ func loadShadowBook(ctx context.Context, tx pgx.Tx, query string, args ...any) (
 		case "cache_write":
 			p.CacheWrite = micros
 		}
-		byTier[maxInput] = p
+		byTier[key] = p
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, err
@@ -122,8 +127,8 @@ func loadShadowBook(ctx context.Context, tx pgx.Tx, query string, args ...any) (
 		return nil, false, nil
 	}
 	tiers := make(provider.ModelPrices, 0, len(byTier))
-	for maxInput, price := range byTier {
-		tiers = append(tiers, provider.Tier{MaxInput: maxInput, Price: price})
+	for key, price := range byTier {
+		tiers = append(tiers, provider.Tier{MaxInput: key.maxInput, Peak: key.peak, Price: price})
 	}
 	return tiers, true, nil
 }

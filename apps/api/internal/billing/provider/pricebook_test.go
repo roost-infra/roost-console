@@ -88,3 +88,13 @@ func TestUnitPrices(t *testing.T) {
 		t.Fatal("missing video tier must error")
 	}
 }
+
+func TestDuplicateUnitPriceRejected(t *testing.T) {
+	doc := `{"version":"v","models":[],"images":[
+		{"model":"m","provider_micros":1,"retail_micros":2},
+		{"model":"m","provider_micros":1,"retail_micros":2}
+	]}`
+	if _, err := LoadPricebook(stringsReader(doc)); err == nil {
+		t.Fatal("duplicate image price must fail")
+	}
+}

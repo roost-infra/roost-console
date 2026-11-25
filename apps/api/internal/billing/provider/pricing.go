@@ -57,14 +57,29 @@ func (m ModelPrices) TierFor(tokens int64) (Tier, error) {
 // TierForPeak selects the tier for a peak label, falling back to the default
 // (empty/非高峰) tier when the requested label has no dedicated row.
 func (m ModelPrices) TierForPeak(tokens int64, peak string) (Tier, error) {
+	if peak != "" {
+		if t, ok := m.selectTier(tokens, func(p string) bool { return p == peak }); ok {
+			return t, nil
+		}
+	}
+	if t, ok := m.selectTier(tokens, func(p string) bool { return p == "" || p == "非高峰" }); ok {
+		return t, nil
+	}
+	if peak != "" {
+		// A peak-only model with no default row still has to price.
+		if t, ok := m.selectTier(tokens, func(string) bool { return true }); ok {
+			return t, nil
+		}
+	}
+	return Tier{}, fmt.Errorf("%w: no tier for %d tokens", ErrInvalidQuote, tokens)
+}
+
+func (m ModelPrices) selectTier(tokens int64, match func(peak string) bool) (Tier, bool) {
 	var best *Tier
 	var unbounded *Tier
 	for i := range m {
 		t := &m[i]
-		if peak != "" && t.Peak != "" && t.Peak != peak {
-			continue
-		}
-		if peak == "" && t.Peak == "高峰" {
+		if !match(t.Peak) {
 			continue
 		}
 		if t.MaxInput <= 0 {
@@ -78,12 +93,12 @@ func (m ModelPrices) TierForPeak(tokens int64, peak string) (Tier, error) {
 		}
 	}
 	if best != nil {
-		return *best, nil
+		return *best, true
 	}
 	if unbounded != nil {
-		return *unbounded, nil
+		return *unbounded, true
 	}
-	return Tier{}, fmt.Errorf("%w: no tier for %d tokens", ErrInvalidQuote, tokens)
+	return Tier{}, false
 }
 
 // Book maps model ids to their tier ladders.
@@ -191,6 +206,9 @@ func (c Calculator) Quote(req Request) (Quote, error) {
 	if u.ProviderTierInput <= 0 {
 		u.ProviderTierInput = u.Input + u.CacheRead
 	}
+	if req.Peak != "" && req.PeakBPS > DefaultPeakBPS {
+		return Quote{}, fmt.Errorf("%w: peak tier and peak multiplier are mutually exclusive", ErrInvalidQuote)
+	}
 	peak := req.PeakBPS
 	if peak <= 0 {
 		peak = DefaultPeakBPS
@@ -228,7 +246,7 @@ func (c Calculator) Quote(req Request) (Quote, error) {
 	grossMinor := retailMinor - allocatedMinor
 	marginBPS := int64(0)
 	if retailMinor > 0 {
-		marginBPS = mulDivRound(grossMinor, 10_000, retailMinor)
+		marginBPS = mulDivRoundSigned(grossMinor, 10_000, retailMinor)
 	}
 	return Quote{
 		Model:           req.Model,
@@ -273,6 +291,22 @@ func creditsFromMinor(minor int64) int64 {
 		return 1
 	}
 	return credits
+}
+
+// mulDivRoundSigned is mulDivRound that preserves a negative numerator.
+func mulDivRoundSigned(a, b, c int64) int64 {
+	if a == 0 || b <= 0 || c <= 0 {
+		return 0
+	}
+	neg := a < 0
+	if neg {
+		a = -a
+	}
+	v := mulDivRound(a, b, c)
+	if neg {
+		return -v
+	}
+	return v
 }
 
 // mulDivRound computes round(a*b/c) half away from zero using big integers.

@@ -104,24 +104,24 @@ func main() {
 			retailPrice := componentPrice(m.Retail, component)
 			if _, err := tx.Exec(ctx, `
 				insert into billing.retail_prices
-					(version,model,component,tier_max_input,usd_micros_per_million,effective_from)
-				values ($1,$2,$3,$4,$5,now())
-				on conflict (version,model,component,tier_max_input) do update set
+					(version,model,component,tier_max_input,peak,usd_micros_per_million,effective_from)
+				values ($1,$2,$3,$4,$5,$6,now())
+				on conflict (version,model,component,tier_max_input,peak) do update set
 					usd_micros_per_million=excluded.usd_micros_per_million,
 					effective_from=excluded.effective_from`,
-				doc.Version, m.Model, component, m.MaxInput, retailPrice); err != nil {
+				doc.Version, m.Model, component, m.MaxInput, m.Peak, retailPrice); err != nil {
 				log.Error("upsert retail", "model", m.Model, "component", component, "err", err)
 				os.Exit(1)
 			}
 			providerPrice := componentPrice(m.Provider, component)
 			if _, err := tx.Exec(ctx, `
 				insert into billing.provider_prices
-					(provider_id,version,model,component,tier_max_input,usd_micros_per_million,effective_from)
-				values ($1,$2,$3,$4,$5,$6,now())
-				on conflict (provider_id,version,model,component,tier_max_input) do update set
+					(provider_id,version,model,component,tier_max_input,peak,usd_micros_per_million,effective_from)
+				values ($1,$2,$3,$4,$5,$6,$7,now())
+				on conflict (provider_id,version,model,component,tier_max_input,peak) do update set
 					usd_micros_per_million=excluded.usd_micros_per_million,
 					effective_from=excluded.effective_from`,
-				*providerID, doc.Version, m.Model, component, m.MaxInput, providerPrice); err != nil {
+				*providerID, doc.Version, m.Model, component, m.MaxInput, m.Peak, providerPrice); err != nil {
 				log.Error("upsert provider", "model", m.Model, "component", component, "err", err)
 				os.Exit(1)
 			}

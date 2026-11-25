@@ -77,6 +77,9 @@ func LoadPricebook(r io.Reader) (Pricebook, error) {
 	seen := map[string]map[string]bool{}
 	for i := range doc.Models {
 		m := &doc.Models[i]
+		if strings.TrimSpace(m.Peak) == "—" {
+			m.Peak = ""
+		}
 		if strings.TrimSpace(m.Model) == "" {
 			return Pricebook{}, fmt.Errorf("%w: model at row %d is empty", ErrInvalidQuote, i+1)
 		}
@@ -98,6 +101,7 @@ func LoadPricebook(r io.Reader) (Pricebook, error) {
 		}
 		seen[m.Model][key] = true
 	}
+	seenUnits := map[string]bool{}
 	for i, u := range append(append([]UnitPrice{}, doc.Images...), doc.Videos...) {
 		if strings.TrimSpace(u.Model) == "" {
 			return Pricebook{}, fmt.Errorf("%w: unit price row %d has no model", ErrInvalidQuote, i+1)
@@ -105,6 +109,15 @@ func LoadPricebook(r io.Reader) (Pricebook, error) {
 		if u.ProviderMicros < 0 || u.RetailMicros < 0 {
 			return Pricebook{}, fmt.Errorf("%w: negative unit price for %s", ErrInvalidQuote, u.Model)
 		}
+		kind := "image"
+		if i >= len(doc.Images) {
+			kind = "video"
+		}
+		key := kind + "|" + u.Model + "|" + u.Tier
+		if seenUnits[key] {
+			return Pricebook{}, fmt.Errorf("%w: duplicate unit price %s", ErrInvalidQuote, key)
+		}
+		seenUnits[key] = true
 	}
 	return doc, nil
 }

@@ -190,3 +190,48 @@ func TestPricebookCacheDoesNotDoubleChargeUser(t *testing.T) {
 		t.Fatalf("cache hit provider cost = %d, want below all-input cost 6800", q.ProviderMinor)
 	}
 }
+
+func TestNegativeMarginIsReported(t *testing.T) {
+	c := Calculator{
+		Retail:   Book{"m": {{MaxInput: 0, Price: Price{Input: 1_000_000}}}},
+		Provider: Book{"m": {{MaxInput: 0, Price: Price{Input: 10_000_000}}}},
+	}
+	q, err := c.Quote(Request{Model: "m", Usage: Usage{OriginalInput: 1_000_000, Input: 1_000_000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.GrossMinor >= 0 || q.MarginBPS != -90_000 {
+		t.Fatalf("gross/margin = %d/%d, want negative/-90000", q.GrossMinor, q.MarginBPS)
+	}
+}
+
+func TestPeakAndMultiplierAreMutuallyExclusive(t *testing.T) {
+	_, err := fixture().Quote(Request{
+		Model:   "gpt-6-astra",
+		Peak:    "高峰",
+		PeakBPS: 20_000,
+		Usage:   Usage{OriginalInput: 1_000, Input: 1_000},
+	})
+	if err == nil {
+		t.Fatal("peak tier plus peak multiplier must error")
+	}
+}
+
+func TestTierForPeakFallbacks(t *testing.T) {
+	tiers := ModelPrices{
+		{MaxInput: 0, Peak: "非高峰", Price: Price{Input: 1}},
+		{MaxInput: 0, Peak: "高峰", Price: Price{Input: 2}},
+	}
+	got, err := tiers.TierForPeak(10, "")
+	if err != nil || got.Price.Input != 1 {
+		t.Fatalf("default = %+v, %v", got, err)
+	}
+	got, err = tiers.TierForPeak(10, "高峰")
+	if err != nil || got.Price.Input != 2 {
+		t.Fatalf("peak = %+v, %v", got, err)
+	}
+	got, err = tiers.TierForPeak(10, "未知")
+	if err != nil || got.Price.Input != 1 {
+		t.Fatalf("unknown fallback = %+v, %v", got, err)
+	}
+}
