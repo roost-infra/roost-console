@@ -2248,11 +2248,11 @@ function AdminPanel({ token }: { token: string }) {
         <div className="admin-table-wrap">
           <table className="admin-table admin-table--orders">
             <thead>
-              <tr><th>时间</th><th>组织</th><th>SKU</th><th>金额</th><th>Credits</th><th>状态</th><th>支付时间</th></tr>
+              <tr><th>时间</th><th>组织</th><th>SKU</th><th>支付方式</th><th>金额</th><th>Credits</th><th>状态</th><th>支付时间</th></tr>
             </thead>
             <tbody>
               {recentOrders.length === 0 ? (
-                <tr><td colSpan={7} className="admin-table__empty">{loading ? '正在加载订单…' : '这个区间还没有订单。'}</td></tr>
+                <tr><td colSpan={8} className="admin-table__empty">{loading ? '正在加载订单…' : '这个区间还没有订单。'}</td></tr>
               ) : recentOrders.map((order) => (
                 <tr key={order.id}>
                   <td className="mono">{new Date(order.created_at).toLocaleString('zh-CN', { hour12: false })}</td>
@@ -2261,6 +2261,7 @@ function AdminPanel({ token }: { token: string }) {
                     <span className="admin-sub mono" title={order.org_id}>{order.org_id.slice(0, 8)}…</span>
                   </td>
                   <td className="mono">{order.sku}</td>
+                  <td className="mono">{order.provider === 'epusdt' ? 'USDT' : '微信/支付宝'}</td>
                   <td className="mono">{yuan(order.amount_cents)}</td>
                   <td className="mono">{credits(order.credits)}</td>
                   <td><span className={`status status--${order.status}`}>{order.status}</span></td>

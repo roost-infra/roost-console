@@ -243,6 +243,7 @@ export interface AdminRecentOrder {
   amount_cents: number;
   credits: number;
   status: string;
+  provider: string;
   created_at: string;
   paid_at: string | null;
 }

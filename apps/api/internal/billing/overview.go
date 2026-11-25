@@ -193,6 +193,7 @@ type AdminRecentOrder struct {
 	AmountCents int64      `json:"amount_cents"`
 	Credits     int64      `json:"credits"`
 	Status      string     `json:"status"`
+	Provider    string     `json:"provider"`
 	CreatedAt   time.Time  `json:"created_at"`
 	PaidAt      *time.Time `json:"paid_at"`
 }
@@ -653,7 +654,7 @@ func (s *Store) AdminOverview(ctx context.Context, days int) (AdminOverview, err
 
 	orderRows, err := s.Pool.Query(ctx, `
 		select o.id, o.org_id, coalesce(org.name,''), o.sku, o.amount_cents::bigint,
-		       o.credits, o.status, o.created_at, o.paid_at
+		       o.credits, o.status, coalesce(o.provider,'xunhupay'), o.created_at, o.paid_at
 		from billing.orders o
 		left join public.organizations org on org.id = o.org_id
 		where o.created_at >= `+adminSince+`
@@ -665,7 +666,7 @@ func (s *Store) AdminOverview(ctx context.Context, days int) (AdminOverview, err
 	for orderRows.Next() {
 		var row AdminRecentOrder
 		if err := orderRows.Scan(&row.ID, &row.OrgID, &row.OrgName, &row.SKU,
-			&row.AmountCents, &row.Credits, &row.Status, &row.CreatedAt, &row.PaidAt); err != nil {
+			&row.AmountCents, &row.Credits, &row.Status, &row.Provider, &row.CreatedAt, &row.PaidAt); err != nil {
 			orderRows.Close()
 			return AdminOverview{}, err
 		}
