@@ -29,6 +29,8 @@ type RelaySettleInput struct {
 	IdempotencyKey string
 	Model          string
 	UpstreamID     string
+	ProviderID     string
+	ProviderPlanID string
 	StartedAt      time.Time
 	PriceVersion   string
 	Usage          *TokenUsage
@@ -335,7 +337,7 @@ func (s *Store) RelaySettleV2(ctx context.Context, in RelaySettleInput) (RelayOp
 				event.UpstreamCostMinor = &cost
 			}
 		}
-		if err := insertUsageEventV2(ctx, tx, orgID, requestID, in.SettlementID, in.ReservationID, event, in.UpstreamID, priceVersion); err != nil {
+		if err := insertUsageEventV2(ctx, tx, orgID, requestID, in.SettlementID, in.ReservationID, event, in.UpstreamID, in.ProviderID, in.ProviderPlanID, priceVersion); err != nil {
 			return RelayOperation{}, err
 		}
 	}

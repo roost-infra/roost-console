@@ -158,11 +158,13 @@ func (s *Server) relaySettle(w http.ResponseWriter, r *http.Request) {
 		Usage          json.RawMessage      `json:"usage"`
 		UsageStats     *billing.UsageEvent  `json:"usage_stats"`
 		// Settle V2 fields.
-		Model        string                    `json:"model"`
-		UpstreamID   string                    `json:"upstream_id"`
-		StartedAt    string                    `json:"started_at"`
-		PriceVersion string                    `json:"price_version"`
-		Basis        *billing.CompressionBasis `json:"basis"`
+		Model          string                    `json:"model"`
+		UpstreamID     string                    `json:"upstream_id"`
+		ProviderID     string                    `json:"provider_id"`
+		ProviderPlanID string                    `json:"provider_plan_id"`
+		StartedAt      string                    `json:"started_at"`
+		PriceVersion   string                    `json:"price_version"`
+		Basis          *billing.CompressionBasis `json:"basis"`
 	}
 	if !decodeRelayBody(w, r, &req) {
 		return
@@ -250,6 +252,8 @@ func (s *Server) relaySettle(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: req.IdempotencyKey,
 		Model:          req.Model,
 		UpstreamID:     req.UpstreamID,
+		ProviderID:     req.ProviderID,
+		ProviderPlanID: req.ProviderPlanID,
 		StartedAt:      startedAt,
 		PriceVersion:   req.PriceVersion,
 		Usage:          tokenUsage,
