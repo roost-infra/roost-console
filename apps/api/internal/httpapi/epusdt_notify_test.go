@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JingxuanC/roost-console/apps/api/internal/auth"
 	"github.com/JingxuanC/roost-console/apps/api/internal/billing"
@@ -241,5 +242,52 @@ func TestPaymentMethodsOnlyListWhatTheAccountMayUse(t *testing.T) {
 	got = s.paymentMethods(&auth.User{Email: "other@example.com"})
 	if len(got) != 1 || got[0] != payment.ProviderXunhuPay {
 		t.Fatalf("other account methods = %v", got)
+	}
+}
+
+// hangUpStore models the production failure: the provider stops waiting for the
+// callback, which cancels the request context, and only then does the credit
+// run. It must still be allowed to finish.
+type hangUpStore struct {
+	*fakePaidOrders
+	onFulfill func()
+	seenErr   error
+}
+
+func (h *hangUpStore) Fulfill(ctx context.Context, orderID, tradeNo string, amountCents int, raw []byte) error {
+	if h.onFulfill != nil {
+		h.onFulfill()
+	}
+	// Give the cancellation a moment to land, then record what the store saw.
+	time.Sleep(20 * time.Millisecond)
+	h.seenErr = ctx.Err()
+	return h.fakePaidOrders.Fulfill(context.WithoutCancel(ctx), orderID, tradeNo, amountCents, raw)
+}
+
+func TestEPUSDTNotifySurvivesProviderHangUp(t *testing.T) {
+	base := &fakePaidOrders{order: epusdtOrder()}
+	store := &hangUpStore{fakePaidOrders: base}
+
+	s := epusdtServer(epusdtConfig(), base)
+	s.paidOrders = store
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store.onFulfill = cancel // the gateway hangs up mid-fulfilment
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/payments/epusdt/notify", strings.NewReader(epusdtCallback(t, epusdtSecret, nil)))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if store.seenErr != nil {
+		t.Fatalf("fulfilment ran on a cancelled context: %v", store.seenErr)
+	}
+	if len(base.calls) != 1 {
+		t.Fatalf("order was not credited after the hang-up: %+v", base.calls)
+	}
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }
