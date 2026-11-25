@@ -34,6 +34,9 @@ jobs:
           file: apps/api/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=false
           tags: |
             ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/console-api:${{ github.sha }}
             ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/console-api:latest
