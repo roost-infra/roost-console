@@ -1013,7 +1013,12 @@ func (s *Server) xunhuNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tradeNo := r.PostForm.Get("trade_order_id")
-	o, err := s.paidOrders.OrderByTradeNo(r.Context(), tradeNo)
+	// XunhuPay also gives up on a slow callback, which cancels r.Context().
+	// Crediting the order must survive that: the money has arrived, and a
+	// gateway retry of the same notification is idempotent.
+	ctx, cancel := s.fulfilContext(r)
+	defer cancel()
+	o, err := s.paidOrders.OrderByTradeNo(ctx, tradeNo)
 	if err != nil {
 		s.log.Warn("xunhupay notify unknown order", "trade_no", tradeNo)
 		http.Error(w, "unknown order", http.StatusNotFound)
@@ -1032,12 +1037,20 @@ func (s *Server) xunhuNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw, _ := json.Marshal(r.PostForm)
-	if err := s.paidOrders.Fulfill(r.Context(), o.ID, r.PostForm.Get("transaction_id"), amount, raw); err != nil {
+	if err := s.paidOrders.Fulfill(ctx, o.ID, r.PostForm.Get("transaction_id"), amount, raw); err != nil {
 		s.log.Error("xunhupay fulfill failed", "order", o.ID, "err", err)
 		http.Error(w, "fulfill failed", http.StatusInternalServerError)
 		return
 	}
 	_, _ = w.Write([]byte("success"))
+}
+
+// fulfilContext detaches fulfilment from the provider's request: a gateway
+// gives a callback about ten seconds and then hangs up, and the connection
+// dying must not roll back credits for money that already moved. Fulfilment is
+// idempotent, so a short timeout and a retry can both be in flight safely.
+func (s *Server) fulfilContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 }
 
 // epusdtNotify handles the crypto gateway's signed payment callback. The
@@ -1064,7 +1077,9 @@ func (s *Server) epusdtNotify(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 		return
 	}
-	o, err := s.paidOrders.OrderByTradeNo(r.Context(), n.OrderID)
+	ctx, cancel := s.fulfilContext(r)
+	defer cancel()
+	o, err := s.paidOrders.OrderByTradeNo(ctx, n.OrderID)
 	if err != nil {
 		s.log.Warn("epusdt notify unknown order", "trade_no", n.OrderID)
 		http.Error(w, "unknown order", http.StatusNotFound)
@@ -1094,7 +1109,7 @@ func (s *Server) epusdtNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	// The gateway trade id is unique per order. The chain hash is not (one
 	// transaction can settle several orders), so it stays in the stored body.
-	if err := s.paidOrders.Fulfill(r.Context(), o.ID, "epusdt_"+n.TradeID, n.AmountCents, body); err != nil {
+	if err := s.paidOrders.Fulfill(ctx, o.ID, "epusdt_"+n.TradeID, n.AmountCents, body); err != nil {
 		s.log.Error("epusdt fulfill failed", "order", o.ID, "err", err)
 		http.Error(w, "fulfill failed", http.StatusInternalServerError)
 		return
