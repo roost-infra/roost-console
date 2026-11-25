@@ -35,6 +35,7 @@ jobs:
           file: apps/api/Dockerfile
           platforms: linux/amd64
           push: true
+          load: true
           provenance: false
           sbom: false
           outputs: type=image,push=true,oci-mediatypes=false
@@ -43,3 +44,13 @@ jobs:
             ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_NAMESPACE }}/console-api:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Save image artifact
+        run: |
+          mkdir -p build
+          docker save ghcr.io/roost-infra/console-api:${{ github.sha }} | gzip -1 > build/console-api-image.tgz
+          ls -lh build/console-api-image.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: console-api-image
+          path: build/console-api-image.tgz
+          retention-days: 3
