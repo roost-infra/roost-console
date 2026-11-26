@@ -1,8 +1,8 @@
 name: deploy
 
-# Builds both console deployables on a runner (the production host is small and
-# must not compile there) and ships them over SSH. Only a push to `main`, or a
-# manual run, deploys: pull requests stop at the checks in ci.yml.
+# Builds the Console web app on a runner and ships the static bundle to 47.82.
+# The API is deployed separately as a Compose image; this workflow never starts
+# the old systemd API service.
 on:
   push:
     branches: [main]
@@ -16,29 +16,6 @@ permissions:
   contents: read
 
 jobs:
-  api:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-          cache-dependency-path: apps/api/go.sum
-      - name: Test
-        working-directory: apps/api
-        run: go test ./...
-      - name: Build
-        working-directory: apps/api
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/build"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "$GITHUB_WORKSPACE/build/roost-console" ./cmd/roost-console
-          gzip -9 -c "$GITHUB_WORKSPACE/build/roost-console" > "$GITHUB_WORKSPACE/build/roost-console.gz"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: console-api
-          path: build/roost-console.gz
-          retention-days: 3
-
   web:
     runs-on: ubuntu-latest
     steps:
@@ -73,7 +50,7 @@ jobs:
           retention-days: 3
 
   deploy:
-    needs: [api, web]
+    needs: [web]
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -83,37 +60,13 @@ jobs:
           merge-multiple: true
       - name: Configure SSH
         env:
-          API_HOST: ${{ vars.CONSOLE_API_HOST }}
           WEB_HOST: ${{ vars.CONSOLE_WEB_HOST }}
         run: |
           install -d -m 700 ~/.ssh
           printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy
           chmod 600 ~/.ssh/deploy
           printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-          ssh-keyscan -H "$API_HOST" "$WEB_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-      - name: Upload API artifact
-        env:
-          HOST: ${{ vars.CONSOLE_API_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          scp -q -i ~/.ssh/deploy -o UserKnownHostsFile=~/.ssh/known_hosts \
-            build/roost-console.gz "$USER@$HOST:/tmp/roost-console-${{ github.sha }}.gz"
-      - name: Deploy API
-        env:
-          HOST: ${{ vars.CONSOLE_API_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-          SHA: ${{ github.sha }}
-        run: |
-          ssh -i ~/.ssh/deploy -o UserKnownHostsFile=~/.ssh/known_hosts "$USER@$HOST" "bash -s -- $SHA" <<'REMOTE'
-          set -euo pipefail
-          SHA="$1"
-          GZ="/tmp/roost-console-$SHA.gz"
-          BIN="/tmp/roost-console-$SHA"
-          gunzip -c "$GZ" > "$BIN"
-          chmod 755 "$BIN"
-          sudo -n /usr/local/bin/roost-deploy console-api "$BIN"
-          rm -f "$GZ" "$BIN"
-          REMOTE
+          ssh-keyscan -H "$WEB_HOST" >> ~/.ssh/known_hosts 2>/dev/null
       - name: Upload web artifact
         env:
           HOST: ${{ vars.CONSOLE_WEB_HOST }}
@@ -164,8 +117,7 @@ jobs:
       - name: Verify public endpoints
         run: |
           for _ in $(seq 1 10); do
-            if curl -fsS -o /dev/null https://www.roostbots.com/console-api/healthz && \
-               curl -fsS https://www.roostbots.com/console/ | grep -q "$(cat build/index-asset.txt)"; then
+            if curl -fsS https://www.roostbots.com/console/ | grep -q "$(cat build/index-asset.txt)"; then
               exit 0
             fi
             sleep 2
