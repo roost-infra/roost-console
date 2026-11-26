@@ -2279,7 +2279,7 @@ function AdminPanel({ token }: { token: string }) {
           <p className="muted">查看账本与订单，手动调整积分；所有调整写入 ledger 审计。</p>
         </div>
         <div className="admin-search">
-          <input className="input" placeholder="组织 ID / slug / 名称" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="input" placeholder="用户邮箱 / 组织 ID / slug / 名称" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="btn btn--accent" onClick={() => void search()}>查询</button>
         </div>
         {orgError && <p className="form-error">{orgError}</p>}{msg && <p className="form-ok">{msg}</p>}
@@ -2288,7 +2288,7 @@ function AdminPanel({ token }: { token: string }) {
           {orgs.length === 0 && <div className="table__empty">输入组织 ID / slug / 名称后查询。</div>}
           {orgs.map((o) => (
             <div className="table__row" key={o.id}>
-              <span>{o.name} <code>{o.slug}</code></span>
+              <span>{o.name} <code>{o.slug}</code>{o.owner_email && <><br /><small className="muted">{o.owner_email}</small></>}</span>
               <span>{o.plan_code}</span>
               <span>{o.balance_credits}</span>
               <span><button className="btn btn--ghost" onClick={() => void open(o.id)}>查看</button></span>

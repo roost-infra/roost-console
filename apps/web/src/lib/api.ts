@@ -137,6 +137,7 @@ export interface AdminOrg {
   slug: string;
   plan_code: string;
   owner_user_id: string;
+  owner_email: string;
   balance_credits: number;
   reserved_credits: number;
   created_at: string;

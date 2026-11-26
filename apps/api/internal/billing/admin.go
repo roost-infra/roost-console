@@ -21,6 +21,7 @@ type AdminOrg struct {
 	Slug          string `json:"slug"`
 	PlanCode      string `json:"plan_code"`
 	OwnerUserID   string `json:"owner_user_id"`
+	OwnerEmail    string `json:"owner_email"`
 	BalanceCredit int64  `json:"balance_credits"`
 	Reserved      int64  `json:"reserved_credits"`
 	CreatedAt     string `json:"created_at"`
@@ -28,13 +29,15 @@ type AdminOrg struct {
 
 const adminOrgSelect = `
 	select o.id, o.name, o.slug, o.plan_code, o.owner_user_id,
+	       coalesce(u.email,''),
 	       coalesce(w.balance_credits,0), coalesce(w.reserved_credits,0), o.created_at::text
 	from public.organizations o
+	left join auth.users u on u.id = o.owner_user_id
 	left join billing.wallets w on w.org_id = o.id`
 
 func scanAdminOrg(row pgx.Row) (AdminOrg, error) {
 	var a AdminOrg
-	err := row.Scan(&a.ID, &a.Name, &a.Slug, &a.PlanCode, &a.OwnerUserID, &a.BalanceCredit, &a.Reserved, &a.CreatedAt)
+	err := row.Scan(&a.ID, &a.Name, &a.Slug, &a.PlanCode, &a.OwnerUserID, &a.OwnerEmail, &a.BalanceCredit, &a.Reserved, &a.CreatedAt)
 	return a, err
 }
 
@@ -42,7 +45,7 @@ func scanAdminOrg(row pgx.Row) (AdminOrg, error) {
 func (s *Store) AdminSearchOrgs(ctx context.Context, query string) ([]AdminOrg, error) {
 	pattern := "%" + query + "%"
 	rows, err := s.Pool.Query(ctx, adminOrgSelect+`
-		where o.id::text = $1 or o.slug ilike $2 or o.name ilike $2
+		where o.id::text = $1 or o.slug ilike $2 or o.name ilike $2 or u.email ilike $2
 		order by o.created_at desc limit 50`, query, pattern)
 	if err != nil {
 		return nil, err
